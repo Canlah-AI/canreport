@@ -41,6 +41,33 @@ logger = logging.getLogger("report")
 BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 
+# Map the FIRST target-market token → (geography label, probe region_code).
+# region_code must be one the live_ai_search probe supports: sg/us/uk/au/eu.
+_MARKET_GEO = {
+    "US": ("United States", "us"),
+    "USA": ("United States", "us"),
+    "EU": ("Europe", "eu"),
+    "EUROPE": ("Europe", "eu"),
+    "SEA": ("Southeast Asia", "sg"),
+    "SG": ("Singapore", "sg"),
+    "SINGAPORE": ("Singapore", "sg"),
+    "UK": ("United Kingdom", "uk"),
+    "GB": ("United Kingdom", "uk"),
+    "AU": ("Australia", "au"),
+    "AUSTRALIA": ("Australia", "au"),
+}
+
+
+def _derive_geography(market: str | None) -> tuple[str, str]:
+    """Derive (geography, region_code) from the FIRST target-market token.
+
+    Defaults to ("United States", "us") for unknown/blank markets (incl. the
+    "全球" default), so the AI-citation queries are never silently pinned to
+    Singapore when the brand actually targets US/EU/SEA.
+    """
+    first = (market or "").split(",")[0].strip().upper()
+    return _MARKET_GEO.get(first, ("United States", "us"))
+
 
 def list_templates() -> list[str]:
     if not TEMPLATES_DIR.is_dir():
@@ -106,10 +133,14 @@ def main() -> int:
         # Pass the detected industry/product hint so ai_citation runs
         # BRAND-RELEVANT buyer-intent queries (not generic Singapore ones).
         detected = (base.get("recommendations", {}) or {}).get("detected_context", {}) or {}
+        geography, region_code = _derive_geography(args.market)
+        logger.info("AI-citation geography=%s region_code=%s (from market=%s)",
+                    geography, region_code, args.market)
         offsite = engine_mod.run_offsite_probes(
             url, brand,
             industry_hint=detected.get("industry"),
-            product_hint=detected.get("product"))
+            product_hint=detected.get("product"),
+            geography=geography, region_code=region_code)
         data = contract_mod.build_contract(base, offsite)
 
     # 3. Render via selected template

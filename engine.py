@@ -170,23 +170,27 @@ def derive_industry_keywords(industry_hint: str | None,
 def build_buyer_queries(industry_hint: str | None,
                         product_hint: str | None,
                         brand: str | None,
-                        geography: str = "Singapore") -> list[str]:
+                        geography: str = "United States") -> list[str]:
     """Build exactly 5 buyer-intent queries spanning 4 intent types.
 
-    Templates (brand-agnostic):
-      1. best {product} brands {geo}            (discovery)
-      2. {product} reviews {geo}                (evaluation)
+    Templates (brand-agnostic). A blank ``geography`` yields broad-market
+    queries (no geo suffix), which is correct for multi-region targets like
+    "US,EU,SEA" where pinning to one country would skew the citation test.
+
+      1. best {product} brands[ {geo}]          (discovery)
+      2. {product} reviews[ {geo}]              (evaluation)
       3. {product} comparison                   (comparison)
-      4. where to buy affordable {product} {geo}(transactional)
+      4. where to buy affordable {product}[ {geo}](transactional)
       5. best {product} for {use_case}          (problem-led)
     """
     product, use_case = _english_product_and_usecase(industry_hint, product_hint, brand)
-    geo = geography.strip() or "Singapore"
+    geo = (geography or "").strip()
+    suffix = f" {geo}" if geo else ""
     return [
-        f"best {product} brands {geo}",
-        f"{product} reviews {geo}",
+        f"best {product} brands{suffix}",
+        f"{product} reviews{suffix}",
         f"{product} comparison",
-        f"where to buy affordable {product} {geo}",
+        f"where to buy affordable {product}{suffix}",
         f"best {product} for {use_case}",
     ]
 
@@ -194,8 +198,8 @@ def build_buyer_queries(industry_hint: str | None,
 def run_ai_citation(engine_root: Path, url: str, brand: str | None,
                     industry_hint: str | None = None,
                     product_hint: str | None = None,
-                    geography: str = "Singapore",
-                    region_code: str = "sg") -> dict:
+                    geography: str = "United States",
+                    region_code: str = "us") -> dict:
     """Run live_ai_search with EXPLICIT brand-relevant buyer-intent queries.
 
     Bypasses the generic template system (the `queries=` param overrides it
@@ -267,13 +271,16 @@ _INDUSTRY_KEYWORD_PROBES = {"news", "backlink", "prompts"}
 def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
              needs_brand: bool, url: str, brand: str | None,
              industry_hint: str | None = None,
-             product_hint: str | None = None) -> tuple[str, dict]:
+             product_hint: str | None = None,
+             geography: str = "United States",
+             region_code: str = "us") -> tuple[str, dict]:
     try:
         # ai_citation uses a dedicated runner with brand-relevant queries.
         if key == "ai_citation":
             return key, run_ai_citation(
                 engine_root, url, brand,
-                industry_hint=industry_hint, product_hint=product_hint)
+                industry_hint=industry_hint, product_hint=product_hint,
+                geography=geography, region_code=region_code)
         mod = _load_probe_module(engine_root, module_name)
         fn = getattr(mod, fn_name)
         # news + backlink probes take industry_keywords (3rd arg) to exclude
@@ -394,24 +401,27 @@ def _run_browser_ai(engine_root: Path, url: str, brand: str | None,
 
 def _browser_ai_queries(offsite: dict[str, dict], url: str,
                         brand: str | None, industry_hint: str | None,
-                        product_hint: str | None) -> list[str]:
+                        product_hint: str | None,
+                        geography: str = "United States") -> list[str]:
     """Pick brand-relevant buyer prompts for the Perplexity browser capture.
 
     Prefer the prompt_discovery buyer_prompts (real PAA + templated), else fall
-    back to the same buyer queries the ai_citation probe uses.
+    back to the same buyer queries the ai_citation probe uses (same geography).
     """
     prompts = offsite.get("prompts", {}) or {}
     bp = prompts.get("buyer_prompts", []) or []
     picked = [p.get("prompt") for p in bp if p.get("prompt")][:5]
     if picked:
         return picked
-    return build_buyer_queries(industry_hint, product_hint, brand)
+    return build_buyer_queries(industry_hint, product_hint, brand, geography)
 
 
 def run_offsite_probes(url: str, brand: str | None = None,
                        max_workers: int = 3,
                        industry_hint: str | None = None,
-                       product_hint: str | None = None) -> dict[str, dict]:
+                       product_hint: str | None = None,
+                       geography: str = "United States",
+                       region_code: str = "us") -> dict[str, dict]:
     """Run all off-site probes and return {key: probe_output}.
 
     Concurrency is capped at 3 (not 9) on purpose: each probe fires 4-6 Serper
@@ -435,7 +445,7 @@ def run_offsite_probes(url: str, brand: str | None = None,
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [
             pool.submit(_run_one, engine_root, key, mod, fn, nb, url, brand,
-                        industry_hint, product_hint)
+                        industry_hint, product_hint, geography, region_code)
             for (key, mod, fn, nb) in OFFSITE_PROBES
         ]
         for fut in as_completed(futures):
@@ -453,7 +463,8 @@ def run_offsite_probes(url: str, brand: str | None = None,
 
     # --- perplexity_browser: Camoufox capture via the superscrape venv python.
     # Uses brand-relevant buyer prompts pulled from the prompts probe result.
-    queries = _browser_ai_queries(results, url, brand, industry_hint, product_hint)
+    queries = _browser_ai_queries(results, url, brand, industry_hint,
+                                  product_hint, geography)
     logger.info("running browser_ai_capture (Perplexity, venv subprocess): %s", queries)
     results["perplexity_browser"] = _run_browser_ai(engine_root, url, brand, queries)
     logger.info("  [perplexity_browser] %s",

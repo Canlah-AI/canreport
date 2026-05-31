@@ -78,6 +78,7 @@ _ENGINE_FRIENDLY = {
     "google_knowledge_graph": "Google 知识图谱",
     "gemini_search": "Gemini AI 回答",
     "openai_chatgpt": "ChatGPT 回答",
+    "perplexity_browser": "Perplexity（浏览器实测）",
 }
 
 _CATEGORY_FRIENDLY = {
@@ -121,13 +122,59 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     # (status "tested" or honest "not_present").
     per_engine = stats.get("per_engine", {}) or {}
     runs_n = stats.get("runs_per_generative_engine", 1) or 1
-    backlog = stats.get("backlog_engines", []) or []
+    backlog = list(stats.get("backlog_engines", []) or [])
     sov = stats.get("sov_percent", 0.0) or 0.0
     sentiment = stats.get("overall_sentiment", "n/a (not mentioned)")
     sent_break = stats.get("sentiment_breakdown", {}) or {}
     halluc = int(stats.get("hallucination_count", 0) or 0)
     dead_links = stats.get("dead_citations", []) or []
     by_cat = stats.get("by_category", {}) or {}
+
+    # ---- Fold perplexity_browser in as a FIRST-CLASS tested engine -------
+    # The browser_ai_capture probe runs a REAL Camoufox Perplexity capture.
+    # When it returned usable data we treat Perplexity exactly like the API
+    # engines: it joins per_engine (status "tested"), the competitor tally,
+    # and is removed from the "待接入 backlog" list so there is no contradiction
+    # (tested AND listed as not-yet-wired). On skip/error it stays in backlog.
+    pb = perplexity_browser or {}
+    pb_status = pb.get("_probe_status")
+    pb_stats = pb.get("summary_stats", {}) or {}
+    pb_results = pb.get("results", []) or []
+    pb_has_data = (pb_status not in ("skipped", "error")
+                   and bool(pb_results or pb_stats.get("queries_total")))
+    if pb_has_data:
+        pb_rate = pb_stats.get("citation_rate")
+        pb_qtotal = pb_stats.get("queries_total", len(pb_results))
+        pb_qcited = pb_stats.get("queries_cited", 0) or 0
+        pb_positions = [r.get("position") for r in pb_results
+                        if r.get("cited") and r.get("position") is not None]
+        per_engine["perplexity_browser"] = {
+            "present": True,
+            "status": "tested",
+            "generative": True,
+            "browser_captured": True,
+            "queries_tested": pb_qtotal,
+            "queries_cited": pb_qcited,
+            "citation_rate": pb_rate,
+            "best_position": min(pb_positions) if pb_positions else None,
+        }
+        # Fold Perplexity competitors into the shared competitor tally so SoV
+        # and the "竞品反被推荐" table reflect every tested engine.
+        pb_comp_tally: dict[str, int] = {}
+        for r in pb_results:
+            for c in (r.get("competitors_cited", []) or r.get("competitors", []) or []):
+                pb_comp_tally[c] = pb_comp_tally.get(c, 0) + 1
+        if pb_comp_tally:
+            existing = {c.get("domain"): c for c in top_comp}
+            for dom, n in pb_comp_tally.items():
+                if dom in existing:
+                    existing[dom]["appearances"] = existing[dom].get("appearances", 0) + n
+                else:
+                    top_comp.append({"domain": dom, "appearances": n})
+            top_comp = sorted(top_comp, key=lambda c: c.get("appearances", 0),
+                              reverse=True)
+        # Drop Perplexity from the backlog display — it WAS tested.
+        backlog = [b for b in backlog if "perplexity" not in str(b).lower()]
 
     # Blended citation rate = mean of per-engine citation_rate across TESTED engines
     # (None = not_present, excluded). Generative rates are already multi-run avgs.
@@ -165,6 +212,11 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     for e, s in per_engine.items():
         if not isinstance(s, dict):
             continue
+        # perplexity_browser gets its own dedicated row below (with the
+        # "real browser capture, not API" note), so skip it here to avoid a
+        # duplicate row now that it also lives in per_engine.
+        if e == "perplexity_browser":
+            continue
         friendly = _ENGINE_FRIENDLY.get(e, e)
         if s.get("status") != "tested":
             table_a_rows.append([friendly, "⚪ 未出现 not_present", "0", "—", "未出现"])
@@ -180,24 +232,18 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
             rate_cell,
             str(best) if best is not None else "未出现",
         ])
-    # Perplexity (browser-captured, REAL) — an extra engine row from the
-    # browser_ai_capture probe. Captured via a real headless browser (Camoufox),
-    # NOT an API, so it complements the API/SERP engines above. Skips gracefully
-    # when the probe was skipped/errored or returned no usable data.
+    # Perplexity (browser-captured, REAL) — dedicated row from the folded
+    # per_engine["perplexity_browser"] entry (see folding block above).
+    # Captured via a real headless browser (Camoufox), NOT an API, so it gets
+    # an explicit note. Skips gracefully when the probe was skipped/errored.
     pb_cited = False
-    pb = perplexity_browser or {}
-    pb_status = pb.get("_probe_status")
-    pb_stats = pb.get("summary_stats", {}) or {}
-    pb_results = pb.get("results", []) or []
-    if pb_status not in ("skipped", "error") and (pb_results or pb_stats.get("queries_total")):
-        pb_rate = pb_stats.get("citation_rate")
-        pb_qtotal = pb_stats.get("queries_total", len(pb_results))
-        pb_qcited = pb_stats.get("queries_cited", 0)
+    pb_engine = per_engine.get("perplexity_browser") if pb_has_data else None
+    if isinstance(pb_engine, dict):
+        pb_rate = pb_engine.get("citation_rate")
+        pb_qtotal = pb_engine.get("queries_tested", 0)
+        pb_qcited = pb_engine.get("queries_cited", 0)
         pb_cited = (pb_qcited or 0) > 0
-        # best position across cited queries (lower is better)
-        pb_positions = [r.get("position") for r in pb_results
-                        if r.get("cited") and r.get("position") is not None]
-        pb_best = min(pb_positions) if pb_positions else None
+        pb_best = pb_engine.get("best_position")
         rate_cell = ("—" if pb_rate is None
                      else f"{_rate_status(pb_rate)} {round(pb_rate * 100)}%")
         table_a_rows.append([
@@ -208,13 +254,17 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
             str(pb_best) if pb_best is not None else "未出现",
         ])
 
-    # Backlog engines — honest "not yet wired" note in the same table
+    # Backlog engines — honest "not yet wired" note in the same table.
+    # Names come straight from the (possibly Perplexity-stripped) backlog list
+    # so we never list an engine here that was actually tested.
     if backlog:
+        backlog_label = " / ".join(
+            str(b).split(" (")[0].strip().title() for b in backlog) or "—"
         table_a_rows.append([
             "backlog（待接入）",
-            "🕒 ChatGPT / Perplexity / Claude",
+            f"🕒 {backlog_label}",
             "—", "—",
-            _trunc(" · ".join(backlog), 48),
+            _trunc(" · ".join(str(b) for b in backlog), 48),
         ])
 
     # Which engines mentioned each competitor (scan results)
@@ -285,13 +335,18 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
             evidence=f"检测到过期竞品: {', '.join(c.get('domain','') for c in top_comp[:3])}",
             confidence=0.6))
 
+    # Friendly names of the engines we ACTUALLY tested — used in the P0 text so
+    # we never overclaim coverage (e.g. naming ChatGPT when it was never run).
+    tested_friendly = [_ENGINE_FRIENDLY.get(e, e) for e in tested]
+    engines_label = "/".join(tested_friendly) or "已测试的 AI 引擎"
+
     # P0 — zero citation while competitors dominate (now SoV% + multi-run framed)
     if total_rows > 0 and total_cited == 0 and top_comp:
         top3 = ", ".join(c.get("domain", "") for c in top_comp[:3])
         comp_total = sum(c.get("appearances", 0) for c in top_comp)
         findings.append(_finding(
             "P0", "0% AI 引用率 — 竞品垄断 AI 推荐",
-            (f"当潜在客户问 ChatGPT/Gemini/Google AI 关于本品类的买家问题时，AI 引擎在 "
+            (f"当潜在客户问 {engines_label} 关于本品类的买家问题时，AI 引擎在 "
              f"{total_rows} 次结果中从未提及 {brand}，却反复推荐 [{top3}]。"
              f"声量占比(SoV) {sov}% — 在 AI 驱动的购买决策中你的品牌几乎隐形，这些流量近乎 100% 流向竞品。"
              f"生成式引擎已做 {runs_n} 次跑取平均，零引用不是抽样噪声，是结构性缺位。"),
@@ -354,6 +409,14 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     n_tested_engines = len(tested)
     n_not_present = sum(1 for s in per_engine.values()
                         if isinstance(s, dict) and s.get("status") != "tested")
+    # Backlog summary names ONLY engines still not wired (Perplexity removed
+    # once browser-tested) — no overclaim in the headline either.
+    if backlog:
+        _backlog_names = "/".join(
+            str(b).split(" (")[0].strip().title() for b in backlog)
+        _backlog_summary = f"、{len(backlog)} 个待接入：{_backlog_names}"
+    else:
+        _backlog_summary = ""
 
     return {
         "icon": "🤖", "title_zh": "AI 引用力 — 当客户问 AI，你的品牌出现吗？",
@@ -364,7 +427,7 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
             f"<p><strong>{score}/100 · 评级 {grade} · 声量占比 SoV {sov}%</strong></p>"
             f"<p>{verdict}</p>"
             f"<p>实测 {n_tested_engines} 个 AI 引擎"
-            f"（另 {n_not_present} 个未出现、{len(backlog)} 个待接入：ChatGPT/Perplexity/Claude），"
+            f"（另 {n_not_present} 个未出现{_backlog_summary}），"
             f"{n_cited_comp} 个竞品反被推荐。引用链接事实性核查："
             f"{('全部可达' if not dead_links else str(len(dead_links)) + ' 个失效/幻觉')}。</p>"),
         "data_table": {
