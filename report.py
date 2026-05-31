@@ -103,7 +103,13 @@ def main() -> int:
         data.setdefault("audit_date", date.today().strftime("%Y-%m-%d"))
     else:
         logger.info("running off-site probes via engine")
-        offsite = engine_mod.run_offsite_probes(url, brand)
+        # Pass the detected industry/product hint so ai_citation runs
+        # BRAND-RELEVANT buyer-intent queries (not generic Singapore ones).
+        detected = (base.get("recommendations", {}) or {}).get("detected_context", {}) or {}
+        offsite = engine_mod.run_offsite_probes(
+            url, brand,
+            industry_hint=detected.get("industry"),
+            product_hint=detected.get("product"))
         data = contract_mod.build_contract(base, offsite)
 
     # 3. Render via selected template

@@ -1,0 +1,1019 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<title>{{ brand_name }} — 基础设施诊断报告 · {{ audit_date }}</title>
+<style>
+  @page {
+    size: A4 portrait;
+    margin: 1.8cm 1.8cm 2.2cm 1.8cm;
+    @bottom-center {
+      content: "CanMarket  ·  第 " counter(page) " / " counter(pages) " 页";
+      font-family: "Inter", "Noto Sans SC", sans-serif;
+      font-size: 8.5pt;
+      color: #94A3B8;
+    }
+    @top-right {
+      content: "{{ brand_name }} · 基础设施诊断";
+      font-family: "Inter", "Noto Sans SC", sans-serif;
+      font-size: 8pt;
+      color: #CBD5E1;
+    }
+  }
+  @page :first { @top-right { content: ""; } @bottom-center { content: ""; } }
+
+  :root {
+    /* Single accent — Interactive Blue. Hierarchy comes from size/weight, not color. */
+    --accent: #2563EB;
+    --accent-dark: #1D4ED8;
+    --accent-soft: #EFF4FF;
+    --accent-line: #DBE6FF;
+
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-tertiary: #94A3B8;
+
+    --surface: #FFFFFF;
+    --surface-alt: #F8FAFC;
+    --border: #E8EBF0;
+    --border-soft: #EEF1F6;
+
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+  }
+
+  html, body {
+    font-family: "Inter", "Noto Sans SC", system-ui, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.7;
+    color: var(--text-primary);
+    margin: 0; padding: 0;
+    background: var(--surface);
+    -webkit-font-smoothing: antialiased;
+  }
+  p, li { text-align: justify; }
+  h1, h2, h3 { color: var(--text-primary); line-height: 1.35; font-weight: 600; }
+  h2 {
+    font-size: 16pt; font-weight: 600;
+    padding-bottom: 0.35em;
+    border-bottom: 1px solid var(--border);
+    margin-top: 1.8em;
+    display: flex; align-items: baseline; gap: 0.5em;
+  }
+  h3 { font-size: 11.5pt; font-weight: 600; margin-top: 1.2em; color: var(--text-primary); }
+  a { color: var(--accent); text-decoration: none; }
+  strong { font-weight: 600; }
+
+  .cm-section-sub {
+    font-size: 9pt; color: var(--text-tertiary); font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+
+  /* ====================== COVER ====================== */
+  .cm-cover {
+    page-break-after: always;
+    display: flex; flex-direction: column;
+    min-height: 23cm; padding: 1cm 0 0 0;
+    position: relative;
+  }
+  .cm-cover-top { padding-top: 0.5cm; }
+  .cm-wordmark {
+    font-size: 26pt; font-weight: 700; letter-spacing: -0.02em;
+    color: var(--text-primary);
+  }
+  .cm-wordmark-dot { color: var(--accent); }
+  .cm-wordmark-sub {
+    font-size: 9.5pt; font-weight: 500; color: var(--text-tertiary);
+    letter-spacing: 0.18em; text-transform: uppercase; margin-top: 0.2em;
+  }
+
+  .cm-cover-center { margin-top: 4.5cm; }
+  .cm-cover-eyebrow {
+    font-size: 11pt; font-weight: 500; color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  .cm-cover-title {
+    font-size: 40pt; font-weight: 700; letter-spacing: -0.025em;
+    color: var(--text-primary); margin: 0.15em 0 0 0; line-height: 1.05;
+  }
+  .cm-cover-rule {
+    width: 56px; height: 3px; background: var(--accent);
+    border-radius: 2px; margin: 0.9cm 0 0.9cm 0;
+  }
+  .cm-cover-brand { font-size: 19pt; font-weight: 600; color: var(--text-primary); }
+  .cm-cover-url { font-size: 10.5pt; color: var(--text-secondary); margin-top: 0.15em; }
+
+  .cm-cover-meta {
+    margin-top: auto; padding-top: 1.2cm;
+    border-top: 1px solid var(--border);
+  }
+  .cm-cover-meta-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 0.45em 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .cm-cover-meta-row:last-child { border-bottom: 0; }
+  .cm-cover-meta-label {
+    color: var(--text-tertiary); font-size: 8.5pt; font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .cm-cover-meta-val { font-size: 10pt; font-weight: 500; color: var(--text-primary); }
+
+  /* ====================== EXECUTIVE SUMMARY ====================== */
+  .cm-exec-hero {
+    display: flex; align-items: center; gap: 2.5em;
+    margin: 1.4em 0;
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.4em 1.6em;
+  }
+  .cm-gauge-wrap { text-align: center; flex-shrink: 0; }
+  .cm-gauge-wrap svg { display: block; margin: 0 auto; }
+  .cm-gauge-caption {
+    font-size: 8.5pt; color: var(--text-secondary); margin-top: 0.5em;
+    font-weight: 500; letter-spacing: 0.03em;
+  }
+  .cm-exec-stats { flex: 1; }
+
+  /* Severity pills — single accent family, hierarchy via weight not color */
+  .cm-severity-summary { display: flex; gap: 0.5em; flex-wrap: wrap; margin-bottom: 0.9em; }
+  .cm-sev-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.32em 0.85em; border-radius: 999px;
+    font-size: 9pt; font-weight: 500;
+    white-space: nowrap;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text-secondary);
+  }
+  .cm-sev-pill strong { color: var(--text-primary); }
+  .sev-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  /* Severity differentiated by fill intensity of the SAME accent, not new hues */
+  .sev-p0 .sev-dot { background: var(--accent); }
+  .sev-p0 { border-color: var(--accent); background: var(--accent-soft); }
+  .sev-p1 .sev-dot { background: var(--accent); opacity: 0.7; }
+  .sev-p2 .sev-dot { background: var(--accent); opacity: 0.4; }
+  .sev-pass .sev-dot { background: var(--text-tertiary); }
+
+  /* Leakage risk — neutral card, accent left bar; intensity = risk */
+  .cm-leakage-box {
+    display: flex; gap: 0.9em; align-items: stretch;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: 0.85em 1em; margin: 0.5em 0;
+    background: var(--surface);
+  }
+  .cm-leakage-bar {
+    flex-shrink: 0; width: 4px; border-radius: 2px; background: var(--accent);
+  }
+  .leakage-high .cm-leakage-bar { background: var(--accent); }
+  .leakage-medium .cm-leakage-bar { background: var(--accent); opacity: 0.6; }
+  .leakage-low .cm-leakage-bar { background: var(--text-tertiary); }
+  .cm-leakage-title { font-weight: 600; font-size: 10.5pt; }
+  .cm-leakage-desc { font-size: 9.5pt; color: var(--text-secondary); margin-top: 0.15em; }
+
+  /* Top Actions */
+  .cm-top-actions { margin-top: 1.4em; }
+  .cm-action-card {
+    display: flex; align-items: center; gap: 0.9em;
+    padding: 0.75em 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .cm-action-card:last-child { border-bottom: 0; }
+  .cm-action-num {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: var(--accent-soft); color: var(--accent-dark);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10pt; font-weight: 700; flex-shrink: 0;
+  }
+  .cm-action-body { flex: 1; }
+  .cm-action-title { font-weight: 600; font-size: 10.5pt; }
+  .cm-action-impact { font-size: 9pt; color: var(--text-secondary); }
+  .cm-effort-tag {
+    display: inline-block; padding: 0.22em 0.65em;
+    background: var(--surface-alt); border: 1px solid var(--border);
+    border-radius: 6px; font-size: 8pt; color: var(--text-secondary);
+    white-space: nowrap;
+  }
+
+  /* ====================== MODULE SECTIONS ====================== */
+  .cm-module { page-break-before: auto; margin-top: 2em; }
+  .cm-module-header {
+    display: flex; align-items: center; gap: 0.9em;
+    border-bottom: 1px solid var(--border); padding-bottom: 0.9em; margin-bottom: 1em;
+  }
+  .cm-module-icon-circle {
+    width: 32px; height: 32px; border-radius: 9px;
+    background: var(--accent-soft); color: var(--accent-dark);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11pt; font-weight: 700; flex-shrink: 0;
+  }
+  .cm-module-title { font-size: 14pt; font-weight: 600; }
+  .cm-module-score { margin-left: auto; font-size: 26pt; font-weight: 700; line-height: 1; }
+  /* score color: single accent for healthy, muted for weak — no red/yellow/green palette */
+  .score-good { color: var(--text-primary); }
+  .score-warn { color: var(--accent); }
+  .score-crit { color: var(--accent-dark); }
+  .cm-module-score-label { font-size: 8pt; color: var(--text-tertiary); text-align: right; font-weight: 500; }
+
+  .cm-module-summary {
+    background: var(--surface-alt); border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.85em 1.1em; margin-bottom: 1em;
+  }
+  .cm-module-summary p { margin: 0.2em 0; font-size: 10pt; }
+
+  /* ====================== FINDING CARDS ====================== */
+  .cm-finding {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--text-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 1em 1.2em;
+    margin: 0.8em 0;
+    background: var(--surface);
+    page-break-inside: avoid;
+  }
+  /* severity = intensity of accent left rail, not separate hues */
+  .cm-finding.fp0 { border-left-color: var(--accent); }
+  .cm-finding.fp1 { border-left-color: var(--accent); border-left-width: 3px; }
+  .cm-finding.fp1 { border-left-color: rgba(37,99,235,0.55); }
+  .cm-finding.fp2 { border-left-color: rgba(37,99,235,0.3); }
+  .cm-finding.fpass { border-left-color: var(--text-tertiary); }
+  .cm-finding-head { display: flex; align-items: center; gap: 0.6em; flex-wrap: wrap; }
+  .cm-finding-badge {
+    font-size: 8pt; padding: 0.22em 0.6em; border-radius: 5px;
+    font-weight: 700; letter-spacing: 0.03em;
+  }
+  /* badges: filled accent for P0, lighter steps down — neutral for pass */
+  .badge-p0 { background: var(--accent); color: #fff; }
+  .badge-p1 { background: var(--accent-soft); color: var(--accent-dark); }
+  .badge-p2 { background: var(--surface-alt); color: var(--text-secondary); border: 1px solid var(--border); }
+  .badge-pass { background: var(--surface-alt); color: var(--text-tertiary); border: 1px solid var(--border); }
+  .cm-finding-title { margin: 0; font-size: 11pt; font-weight: 600; flex: 1; }
+  .cm-finding-conf { font-size: 8pt; color: var(--text-tertiary); }
+  .cm-finding-section { margin-top: 0.85em; }
+  .cm-finding-label {
+    font-size: 8pt; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-tertiary); font-weight: 700; margin-bottom: 0.15em;
+  }
+  .cm-finding-body { font-size: 9.8pt; line-height: 1.65; color: var(--text-primary); }
+  .cm-finding-body p { margin: 0.2em 0; }
+  .cm-finding-action .cm-finding-label { color: var(--accent-dark); }
+
+  /* ====================== CODE BLOCKS ====================== */
+  .cm-code-wrap { margin: 0.6em 0; page-break-inside: avoid; }
+  .cm-code-header {
+    display: flex; justify-content: space-between; align-items: center;
+    background: #0F172A; color: #CBD5E1; padding: 0.45em 0.9em;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0; font-size: 8pt;
+  }
+  .cm-code-lang {
+    display: inline-block; padding: 0.15em 0.55em;
+    background: var(--accent); color: #fff; border-radius: 4px;
+    font-weight: 600; letter-spacing: 0.05em; font-size: 7.5pt;
+  }
+  .cm-code-loc {
+    display: inline-flex; align-items: center; gap: 0.35em;
+    color: #64748B; font-size: 7.5pt;
+  }
+  .cm-code-loc-arrow {
+    display: inline-block; width: 0; height: 0;
+    border-left: 4px solid var(--accent); border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+  }
+  .cm-code-body {
+    background: #1E293B; color: #E2E8F0; padding: 0.8em 1em;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm); overflow-x: auto;
+    font-family: "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    font-size: 8.5pt; line-height: 1.55;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .cm-code-disclaimer {
+    font-size: 7.5pt; color: var(--text-tertiary);
+    margin-top: 0.25em; font-style: italic;
+    display: flex; align-items: center; gap: 0.3em;
+  }
+  .cm-code-disclaimer-dot {
+    display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0;
+  }
+
+  /* Account auth notice */
+  .cm-auth-notice {
+    font-size: 8pt; color: var(--text-secondary); margin-top: 0.4em;
+    padding: 0.4em 0.7em; background: var(--accent-soft); border-radius: 6px;
+    display: flex; align-items: center; gap: 0.4em;
+  }
+  .cm-auth-notice-icon {
+    display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+    background: var(--accent); flex-shrink: 0;
+  }
+
+  /* ====================== TABLES ====================== */
+  table { border-collapse: collapse; width: 100%; margin: 0.7em 0; font-size: 9.5pt; }
+  th, td { padding: 0.5em 0.7em; text-align: left; vertical-align: top; }
+  thead th {
+    background: transparent; color: var(--text-primary);
+    font-weight: 600; font-size: 9pt;
+    border-bottom: 1.5px solid var(--accent);
+  }
+  tbody tr { border-bottom: 1px solid var(--border-soft); }
+  tbody tr:nth-child(even) { background: var(--surface-alt); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ====================== READINESS GRID ====================== */
+  .cm-readiness {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.8em; margin: 1em 0;
+  }
+  .cm-readiness-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.95em; text-align: center; page-break-inside: avoid;
+    background: var(--surface);
+  }
+  .cm-readiness-card.ready { border-top: 3px solid var(--accent); }
+  .cm-readiness-card.not-ready { border-top: 3px solid var(--accent-dark); background: var(--accent-soft); }
+  .cm-readiness-card.partial { border-top: 3px solid rgba(37,99,235,0.45); }
+  .cm-readiness-status { display: flex; justify-content: center; margin-bottom: 0.3em; }
+  .readiness-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; }
+  .readiness-dot-ready { background: var(--accent); }
+  .readiness-dot-not-ready { background: var(--accent-dark); }
+  .readiness-dot-partial { background: rgba(37,99,235,0.45); }
+  .cm-readiness-name { font-size: 9.5pt; font-weight: 600; margin-top: 0.3em; }
+  .cm-readiness-desc { font-size: 8pt; color: var(--text-secondary); margin-top: 0.2em; }
+
+  /* ====================== NEXT STEPS CTA ====================== */
+  .cm-next-steps {
+    background: var(--text-primary);
+    color: #fff; border-radius: var(--radius-lg);
+    padding: 1.6em 1.9em; margin-top: 2em; page-break-inside: avoid;
+  }
+  .cm-next-steps h2 { color: #fff; border: 0; margin-top: 0; font-size: 15pt; }
+  .cm-next-steps p { font-size: 10.5pt; line-height: 1.7; color: #E2E8F0; }
+  .cm-next-steps a { color: #93B4FF; }
+  .cm-next-steps-row {
+    display: flex; gap: 2em; flex-wrap: wrap; margin-top: 1em; font-size: 10pt;
+  }
+  .cm-next-steps-row div { min-width: 5cm; }
+  .cm-next-label {
+    font-size: 8pt; letter-spacing: 0.08em; color: rgba(255,255,255,0.55);
+    text-transform: uppercase; margin-bottom: 0.1em;
+  }
+
+  /* ====================== TOC ====================== */
+  .toc-list { list-style: none; padding: 0; margin: 0; }
+  .toc-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.45em 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .toc-item a { color: var(--text-primary); font-size: 10.5pt; flex: 1; }
+
+  /* ====================== EMBEDDED DELIVERABLES ====================== */
+  .cm-deliverable { margin: 2em 0; page-break-before: always; }
+  .cm-deliverable-header {
+    display: flex; align-items: center; gap: 0.8em;
+    padding-bottom: 0.9em; margin-bottom: 1.1em;
+    border-bottom: 1px solid var(--border);
+  }
+  .cm-deliverable-num {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10pt; font-weight: 700; flex-shrink: 0;
+  }
+  .cm-deliverable-title { font-size: 13pt; font-weight: 600; color: var(--text-primary); }
+  .cm-deliverable-subtitle { font-size: 9pt; color: var(--text-secondary); margin-top: 0.05em; }
+
+  /* Content matrix table */
+  .cm-matrix-table { width: 100%; border-collapse: collapse; margin: 0.8em 0; font-size: 9.5pt; }
+  .cm-matrix-table thead th {
+    background: transparent; color: var(--text-primary);
+    font-weight: 600; font-size: 9pt;
+    border-bottom: 1.5px solid var(--accent);
+    padding: 0.6em 0.8em; text-align: left;
+  }
+  .cm-matrix-table tbody td { padding: 0.6em 0.8em; vertical-align: top; border-bottom: 1px solid var(--border-soft); }
+  .cm-matrix-table tbody tr:nth-child(even) { background: var(--surface-alt); }
+  .cm-matrix-cat-name { font-weight: 600; color: var(--accent-dark); white-space: nowrap; }
+  .cm-matrix-topics { font-size: 9pt; color: var(--text-secondary); line-height: 1.6; }
+  .cm-matrix-freq {
+    display: inline-block; padding: 0.2em 0.6em;
+    background: var(--accent-soft); border-radius: 5px;
+    font-size: 8pt; color: var(--accent-dark); font-weight: 500; white-space: nowrap;
+  }
+  .cm-matrix-seo { font-size: 8.5pt; color: var(--text-secondary); }
+
+  /* Whitepaper timeline */
+  .cm-wp-timeline { position: relative; margin: 1em 0 1em 1.5em; padding-left: 1.8em; }
+  .cm-wp-timeline::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 2px; background: var(--accent-line); border-radius: 1px;
+  }
+  .cm-wp-step {
+    position: relative; margin-bottom: 1em; padding: 0.85em 1em;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); page-break-inside: avoid;
+  }
+  .cm-wp-step-num {
+    position: absolute; left: -2.55em; top: 1em;
+    width: 16px; height: 16px; border-radius: 5px;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 7pt; font-weight: 700; border: 2px solid #fff;
+  }
+  .cm-wp-step-title { font-weight: 600; font-size: 10.5pt; color: var(--text-primary); }
+  .cm-wp-step-content { font-size: 9.5pt; color: var(--text-secondary); margin-top: 0.2em; }
+  .cm-wp-step-notes { font-size: 8.5pt; color: var(--text-tertiary); margin-top: 0.3em; font-style: italic; }
+
+  /* Product page wireframe */
+  .cm-wireframe-section {
+    display: flex; align-items: flex-start; gap: 1em;
+    padding: 0.8em 1em; margin: 0.5em 0;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); page-break-inside: avoid;
+    border-left: 3px solid var(--border);
+  }
+  .cm-wireframe-section-num {
+    width: 24px; height: 24px; border-radius: 7px;
+    background: var(--surface-alt); color: var(--text-secondary);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9pt; font-weight: 700; flex-shrink: 0;
+  }
+  .cm-wireframe-section-body { flex: 1; }
+  .cm-wireframe-section-name { font-weight: 600; font-size: 10.5pt; }
+  .cm-wireframe-elements { display: flex; flex-wrap: wrap; gap: 0.35em; margin-top: 0.4em; }
+  .cm-element-chip {
+    display: inline-block; padding: 0.2em 0.55em;
+    background: var(--surface-alt); border-radius: 5px;
+    font-size: 8pt; color: var(--text-secondary);
+    border: 1px solid var(--border);
+  }
+  .cm-priority-pill {
+    display: inline-block; padding: 0.15em 0.6em; border-radius: 999px;
+    font-size: 7.5pt; font-weight: 600; letter-spacing: 0.03em;
+    flex-shrink: 0; margin-top: 0.15em;
+  }
+  .priority-must { background: var(--accent); color: #fff; }
+  .priority-rec { background: var(--surface-alt); color: var(--text-secondary); border: 1px solid var(--border); }
+  .priority-strong { background: var(--accent-soft); color: var(--accent-dark); }
+
+  /* Form mockup */
+  .cm-form-mockup-grid { display: flex; gap: 1.2em; flex-wrap: wrap; margin: 1em 0; }
+  .cm-form-mockup-card {
+    flex: 1; min-width: 200px; max-width: 280px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); overflow: hidden;
+    page-break-inside: avoid;
+  }
+  .cm-form-mockup-header {
+    padding: 0.7em 1em; background: var(--accent); color: #fff;
+  }
+  .cm-form-mockup-stage { font-size: 10pt; font-weight: 600; }
+  .cm-form-mockup-conv { font-size: 8pt; opacity: 0.85; margin-top: 0.1em; }
+  .cm-form-mockup-body { padding: 0.85em 1em; }
+  .cm-form-mock-field { margin-bottom: 0.6em; }
+  .cm-form-mock-label {
+    display: block; font-size: 8pt; font-weight: 600; color: var(--text-secondary);
+    margin-bottom: 0.2em;
+  }
+  .cm-form-mock-input {
+    display: block; width: 100%; box-sizing: border-box;
+    padding: 0.45em 0.6em; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 8.5pt; color: var(--text-tertiary);
+    background: var(--surface-alt);
+  }
+  .cm-form-mock-btn {
+    display: block; width: 100%;
+    padding: 0.6em; margin-top: 0.8em;
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 6px; font-size: 9pt; font-weight: 600;
+    text-align: center; cursor: default;
+  }
+  .cm-form-mock-privacy { font-size: 7pt; color: var(--text-tertiary); margin-top: 0.5em; text-align: center; }
+  .cm-form-mock-usecase {
+    font-size: 7.5pt; color: var(--text-secondary);
+    padding: 0.4em 1em 0.6em; border-top: 1px solid var(--border-soft);
+  }
+
+  /* Conversion benchmark chart — single accent, intensity encodes value */
+  .cm-bench-chart { margin: 1em 0; }
+  .cm-bench-row { display: flex; align-items: center; gap: 0.6em; margin: 0.4em 0; }
+  .cm-bench-label { width: 70px; text-align: right; font-size: 9pt; color: var(--text-secondary); font-weight: 500; }
+  .cm-bench-bar-track {
+    flex: 1; height: 22px; background: var(--surface-alt); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden; position: relative;
+  }
+  .cm-bench-bar-fill {
+    height: 100%; border-radius: 5px; display: flex; align-items: center;
+    padding-left: 0.55em; font-size: 8pt; color: #fff; font-weight: 600;
+  }
+  .cm-bench-bar-good { background: var(--accent); }
+  .cm-bench-bar-ok { background: rgba(37,99,235,0.72); }
+  .cm-bench-bar-warn { background: rgba(37,99,235,0.48); }
+  .cm-bench-bar-bad { background: rgba(37,99,235,0.28); color: var(--text-secondary); }
+  .cm-bench-source { font-size: 7.5pt; color: var(--text-tertiary); margin-top: 0.3em; font-style: italic; text-align: right; }
+
+  /* Design guidelines list */
+  .cm-guideline-list { margin: 0.8em 0; }
+  .cm-guideline-item {
+    display: flex; align-items: flex-start; gap: 0.7em;
+    padding: 0.6em 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .cm-guideline-check {
+    width: 20px; height: 20px; border-radius: 6px;
+    background: var(--accent-soft); color: var(--accent-dark);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10pt; flex-shrink: 0; margin-top: 0.1em;
+  }
+  .cm-guideline-text { font-size: 10pt; font-weight: 500; color: var(--text-primary); }
+  .cm-guideline-bench { font-size: 8.5pt; color: var(--text-secondary); margin-top: 0.15em; }
+
+  .cm-conversion-callout {
+    margin: 1em 0; padding: 0.85em 1.2em;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-sm);
+    font-size: 9.5pt; color: var(--text-primary);
+  }
+  .cm-conversion-callout-title { font-weight: 700; font-size: 8pt; color: var(--accent-dark); letter-spacing: 0.04em; margin-bottom: 0.3em; text-transform: uppercase; }
+
+  /* ====================== METHODOLOGY ====================== */
+  .cm-method-note {
+    margin-top: 1em; padding: 0.85em 1.2em; background: var(--surface-alt);
+    border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: var(--radius-sm); font-size: 9.5pt; color: var(--text-secondary);
+  }
+
+  /* ====================== UTILITIES ====================== */
+  .muted { color: var(--text-secondary); }
+  .small { font-size: 9pt; line-height: 1.6; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.15em 0; }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
+  section { margin: 1.2em 0; }
+  .page-break { page-break-before: always; }
+  .cm-appendix-divider {
+    page-break-before: always;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 8cm; margin: 2em 0; text-align: center;
+  }
+  .cm-appendix-divider-eyebrow { font-size: 11pt; font-weight: 500; color: var(--accent); letter-spacing: 0.04em; }
+  .cm-appendix-divider-title { font-size: 28pt; font-weight: 700; letter-spacing: -0.02em; color: var(--text-primary); margin-top: 0.2em; }
+  .cm-appendix-divider-sub { font-size: 10pt; color: var(--text-secondary); margin-top: 0.5em; }
+  .cm-appendix-divider-rule { width: 56px; height: 3px; background: var(--accent); border-radius: 2px; margin-top: 1.2em; }
+</style>
+</head>
+<body>
+
+{% include "cover.html" %}
+
+{# ==== Table of Contents ==== #}
+<section class="toc" style="margin-bottom:1.5em;">
+  <h2>
+    目录
+    <span class="cm-section-sub">Table of Contents</span>
+  </h2>
+  <ol class="toc-list">
+    <li class="toc-item"><a href="#exec">执行摘要</a></li>
+    {% for mod in modules %}
+    <li class="toc-item"><a href="#mod-{{ loop.index }}">{{ mod.title_zh }}</a></li>
+    {% endfor %}
+    {% if readiness_items %}
+    <li class="toc-item"><a href="#readiness">生态就绪度</a></li>
+    {% endif %}
+    {% if recommendations and recommendations.blog_content_matrix %}
+    <li class="toc-item"><a href="#deliverable-a">附件 A: 内容矩阵模板</a></li>
+    {% endif %}
+    {% if recommendations and recommendations.whitepaper_template %}
+    <li class="toc-item"><a href="#deliverable-b">附件 B: 行业白皮书结构模板</a></li>
+    {% endif %}
+    {% if recommendations and recommendations.product_page_template %}
+    <li class="toc-item"><a href="#deliverable-c">附件 C: 高转化产品详情页模板</a></li>
+    {% endif %}
+    {% if form_best_practices and form_best_practices.recommended_fields_by_funnel %}
+    <li class="toc-item"><a href="#deliverable-d">附件 D: 留资表单最佳实践模板</a></li>
+    <li class="toc-item"><a href="#deliverable-e">附件 E: 表单字段数 vs 转化率基准</a></li>
+    {% if form_best_practices.design_guidelines %}
+    <li class="toc-item"><a href="#deliverable-f">附件 F: 表单设计最佳实践</a></li>
+    {% endif %}
+    {% endif %}
+    <li class="toc-item"><a href="#methodology">方法论与披露</a></li>
+    <li class="toc-item"><a href="#next">下一步</a></li>
+  </ol>
+</section>
+
+{# ==== Executive Summary ==== #}
+{% include "executive.html" %}
+
+{# ==== Module Sections ==== #}
+{% for mod in modules %}
+<section class="cm-module" id="mod-{{ loop.index }}">
+  <div class="cm-module-header">
+    <div class="cm-module-icon-circle">{{ loop.index }}</div>
+    <div>
+      <div class="cm-module-title">{{ mod.title_zh }}</div>
+      <div class="small muted">{{ mod.title_en }}</div>
+    </div>
+    <div style="margin-left:auto; text-align:right;">
+      {% if mod.score == -1 %}
+      <div class="cm-module-score" style="color:var(--text-tertiary);">N/A</div>
+      <div class="cm-module-score-label">跳过</div>
+      {% else %}
+      <div class="cm-module-score {% if mod.score >= 70 %}score-good{% elif mod.score >= 40 %}score-warn{% else %}score-crit{% endif %}">
+        {{ mod.score }}
+      </div>
+      <div class="cm-module-score-label">/ 100</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if mod.summary_html %}
+  <div class="cm-module-summary">
+    {{ mod.summary_html | safe }}
+  </div>
+  {% endif %}
+
+  {% if mod.data_table %}
+  <table>
+    <thead>
+      <tr>{% for h in mod.data_table.headers %}<th{% if loop.index0 > 0 %} class="num"{% endif %}>{{ h }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in mod.data_table.rows %}
+      <tr>{% for cell in row %}<td{% if loop.index0 > 0 %} class="num"{% endif %}>{{ cell }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% for f in mod.findings %}
+  <article class="cm-finding f{{ f.severity | lower }}">
+    <header class="cm-finding-head">
+      <span class="cm-finding-badge badge-{{ f.severity | lower }}">{{ f.severity | upper }}</span>
+      <h3 class="cm-finding-title">{{ f.title_zh }}</h3>
+      {% if f.rule_id %}<span class="cm-finding-conf">{{ f.rule_id }}</span>{% endif %}
+      {% if f.confidence < 1.0 %}<span class="cm-finding-conf">置信度 {{ (f.confidence * 100) | int }}%</span>{% endif %}
+    </header>
+
+    {% if f.evidence %}
+    <div class="cm-finding-section">
+      <div class="cm-finding-label">证据 Evidence</div>
+      <div class="cm-finding-body" style="white-space:pre-line;">{{ f.evidence }}</div>
+    </div>
+    {% endif %}
+
+    {% if f.impact_zh %}
+    <div class="cm-finding-section">
+      <div class="cm-finding-label">影响 Impact</div>
+      <div class="cm-finding-body" style="white-space:pre-line;">{{ f.impact_zh }}</div>
+    </div>
+    {% endif %}
+
+    {% if f.action_zh %}
+    <div class="cm-finding-section cm-finding-action">
+      <div class="cm-finding-label">建议操作 Action</div>
+      <div class="cm-finding-body" style="white-space:pre-line;">{{ f.action_zh }}</div>
+    </div>
+    {% endif %}
+
+    {% if f.code_snippet %}
+    <div class="cm-code-wrap">
+      <div class="cm-code-header">
+        <span class="cm-code-lang">{{ f.code_language | default('HTML') }}</span>
+        {% if f.paste_location %}
+        <span class="cm-code-loc">
+          <span class="cm-code-loc-arrow"></span> {{ f.paste_location }}
+        </span>
+        {% endif %}
+      </div>
+      <div class="cm-code-body">{{ f.code_snippet | safe }}</div>
+      <div class="cm-code-disclaimer">
+        <span class="cm-code-disclaimer-dot"></span>
+        部署前请开发团队验证 · Please verify with your dev team before deployment
+      </div>
+    </div>
+    {% endif %}
+
+    {% if f.needs_account %}
+    <div class="cm-auth-notice">
+      <span class="cm-auth-notice-icon"></span>
+      需要分析账户权限才能完整验证此项
+    </div>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endfor %}
+
+{# ==== APPENDIX DIVIDER ==== #}
+{% if recommendations and (recommendations.blog_content_matrix or recommendations.whitepaper_template or recommendations.product_page_template) %}
+<section class="cm-appendix-divider">
+  <div class="cm-appendix-divider-eyebrow">附件 · Appendix</div>
+  <div class="cm-appendix-divider-title">可复用模板</div>
+  <div class="cm-appendix-divider-sub">以下为可直接复用的模板与最佳实践</div>
+  <div class="cm-appendix-divider-rule"></div>
+</section>
+{% endif %}
+
+{# ==== EMBEDDED DELIVERABLES ==== #}
+{# --- Appendix A: Content Matrix --- #}
+{% if recommendations and recommendations.blog_content_matrix %}
+{% set matrix = recommendations.blog_content_matrix %}
+<section class="cm-deliverable" id="deliverable-a">
+  <div class="cm-deliverable-header">
+    <div class="cm-deliverable-num">A</div>
+    <div>
+      <div class="cm-deliverable-title">内容矩阵模板</div>
+      <div class="cm-deliverable-subtitle">Appendix A: Blog Content Matrix Template</div>
+    </div>
+  </div>
+  <p class="small muted">{{ matrix.description }}</p>
+  <table class="cm-matrix-table">
+    <thead>
+      <tr>
+        <th style="width:12%;">内容类别</th>
+        <th style="width:48%;">建议主题（5个示例）</th>
+        <th style="width:15%;">发布频率</th>
+        <th style="width:25%;">SEO 价值</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for cat in matrix.categories %}
+      <tr>
+        <td>
+          <span class="cm-matrix-cat-name">{{ cat.name }}</span>
+          <div class="cm-matrix-topics">{{ cat.purpose }}</div>
+        </td>
+        <td>
+          <ol style="margin:0; padding-left:1.2em; font-size:9pt; color:var(--text-secondary);">
+            {% for topic in cat.topics %}
+            <li>{{ topic }}</li>
+            {% endfor %}
+          </ol>
+        </td>
+        <td><span class="cm-matrix-freq">{{ cat.frequency }}</span></td>
+        <td><span class="cm-matrix-seo">{{ cat.seo_value }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{# --- Appendix B: Whitepaper Structure --- #}
+{% if recommendations and recommendations.whitepaper_template %}
+{% set wp = recommendations.whitepaper_template %}
+<section class="cm-deliverable" id="deliverable-b">
+  <div class="cm-deliverable-header">
+    <div class="cm-deliverable-num">B</div>
+    <div>
+      <div class="cm-deliverable-title">行业白皮书结构模板</div>
+      <div class="cm-deliverable-subtitle">Appendix B: Whitepaper Structure Template</div>
+    </div>
+  </div>
+  <p class="small muted">{{ wp.description }}  |  建议篇幅 8-15 页</p>
+  <div class="cm-wp-timeline">
+    {% for step in wp.structure %}
+    <div class="cm-wp-step">
+      <div class="cm-wp-step-num">{{ loop.index }}</div>
+      <div class="cm-wp-step-title">{{ step.section }}</div>
+      <div class="cm-wp-step-content">{{ step.content }}</div>
+      {% if step.notes %}
+      <div class="cm-wp-step-notes">{{ step.notes }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% if wp.conversion_design %}
+  <div class="cm-conversion-callout">
+    <div class="cm-conversion-callout-title">Conversion Tip</div>
+    {{ wp.conversion_design | safe }}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{# --- Appendix C: Product Page Wireframe --- #}
+{% if recommendations and recommendations.product_page_template %}
+{% set ppt = recommendations.product_page_template %}
+<section class="cm-deliverable" id="deliverable-c">
+  <div class="cm-deliverable-header">
+    <div class="cm-deliverable-num">C</div>
+    <div>
+      <div class="cm-deliverable-title">高转化产品详情页模板</div>
+      <div class="cm-deliverable-subtitle">Appendix C: High-Conversion Product Page Wireframe</div>
+    </div>
+  </div>
+  <p class="small muted">{{ ppt.description }}</p>
+  {% for sec in ppt.sections %}
+  <div class="cm-wireframe-section" style="{% if sec.priority == '必须' %}border-left-color: var(--accent);{% elif sec.priority == '强烈推荐' %}border-left-color: rgba(37,99,235,0.5);{% else %}border-left-color: var(--border);{% endif %}">
+    <div class="cm-wireframe-section-num">{{ loop.index }}</div>
+    <div class="cm-wireframe-section-body">
+      <div style="display:flex; align-items:center; gap:0.6em;">
+        <span class="cm-wireframe-section-name">{{ sec.name }}</span>
+        <span class="cm-priority-pill {% if sec.priority == '必须' %}priority-must{% elif sec.priority == '强烈推荐' %}priority-strong{% else %}priority-rec{% endif %}">{{ sec.priority }}</span>
+      </div>
+      <div class="cm-wireframe-elements">
+        {% for el in sec.elements %}
+        <span class="cm-element-chip">{{ el }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# --- Appendix D: Form Mockup --- #}
+{% if form_best_practices and form_best_practices.recommended_fields_by_funnel %}
+<section class="cm-deliverable" id="deliverable-d">
+  <div class="cm-deliverable-header">
+    <div class="cm-deliverable-num">D</div>
+    <div>
+      <div class="cm-deliverable-title">留资表单最佳实践模板</div>
+      <div class="cm-deliverable-subtitle">Appendix D: Lead Form Mockup by Funnel Stage</div>
+    </div>
+  </div>
+  <p class="small muted">按营销漏斗阶段设计不同复杂度的表单，平衡线索量与线索质量。</p>
+  <div class="cm-form-mockup-grid">
+    {% for stage in form_best_practices.recommended_fields_by_funnel %}
+    <div class="cm-form-mockup-card">
+      <div class="cm-form-mockup-header">
+        <div class="cm-form-mockup-stage">{{ stage.stage }}</div>
+        <div class="cm-form-mockup-conv">预期转化率: {{ stage.expected_conversion }}</div>
+      </div>
+      <div class="cm-form-mockup-body">
+        {% for field in stage.fields %}
+        <div class="cm-form-mock-field">
+          <label class="cm-form-mock-label">{{ field }} <span style="color:var(--accent);">*</span></label>
+          <div class="cm-form-mock-input">{% if field == '邮箱' %}name@company.com{% elif field == '电话' %}+86 138-xxxx-xxxx{% elif field == '需求描述' %}请简述您的需求...{% else %}{% endif %}</div>
+        </div>
+        {% endfor %}
+        <div class="cm-form-mock-btn">{% if stage.field_count <= 2 %}免费下载{% elif stage.field_count <= 4 %}申请演示{% else %}获取报价{% endif %}</div>
+        <div class="cm-form-mock-privacy">我们尊重您的隐私。提交即同意《隐私政策》</div>
+      </div>
+      <div class="cm-form-mock-usecase">适用: {{ stage.use_case }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{# --- Appendix E: Form Conversion Benchmark Chart --- #}
+<section class="cm-deliverable" id="deliverable-e">
+  <div class="cm-deliverable-header">
+    <div class="cm-deliverable-num">E</div>
+    <div>
+      <div class="cm-deliverable-title">表单字段数 vs 转化率基准</div>
+      <div class="cm-deliverable-subtitle">Appendix E: Form Field Count vs Conversion Rate Benchmark</div>
+    </div>
+  </div>
+  <p class="small muted">每增加一个字段，转化率下降约 {{ form_best_practices.field_friction_benchmarks.per_field_conversion_drop }}。超过 7 个字段时弃填率达 {{ form_best_practices.field_friction_benchmarks.abandonment_rate_above_7_fields }}。</p>
+  <div class="cm-bench-chart">
+    <div class="cm-bench-row">
+      <div class="cm-bench-label">2 字段</div>
+      <div class="cm-bench-bar-track"><div class="cm-bench-bar-fill cm-bench-bar-good" style="width:92%;">25%</div></div>
+    </div>
+    <div class="cm-bench-row">
+      <div class="cm-bench-label">3 字段</div>
+      <div class="cm-bench-bar-track"><div class="cm-bench-bar-fill cm-bench-bar-good" style="width:82%;">20.9%</div></div>
+    </div>
+    <div class="cm-bench-row">
+      <div class="cm-bench-label">4 字段</div>
+      <div class="cm-bench-bar-track"><div class="cm-bench-bar-fill cm-bench-bar-ok" style="width:68%;">16.8%</div></div>
+    </div>
+    <div class="cm-bench-row">
+      <div class="cm-bench-label">5 字段</div>
+      <div class="cm-bench-bar-track"><div class="cm-bench-bar-fill cm-bench-bar-ok" style="width:55%;">12.7%</div></div>
+    </div>
+    <div class="cm-bench-row">
+      <div class="cm-bench-label">6 字段</div>
+      <div class="cm-bench-bar-track"><div class="cm-bench-bar-fill cm-bench-bar-warn" style="width:40%;">8.6%</div></div>
+    </div>
+    <div class="cm-bench-row">
+      <div class="cm-bench-label">7 字段</div>
+      <div class="cm-bench-bar-track"><div class="cm-bench-bar-fill cm-bench-bar-warn" style="width:28%;">4.5%</div></div>
+    </div>
+    <div class="cm-bench-row">
+      <div class="cm-bench-label">8+ 字段</div>
+      <div class="cm-bench-bar-track"><div class="cm-bench-bar-fill cm-bench-bar-bad" style="width:15%;">2.1%</div></div>
+    </div>
+  </div>
+  <div class="cm-bench-source">数据来源: {{ form_best_practices.field_friction_benchmarks.source }} | 最佳字段数: {{ form_best_practices.field_friction_benchmarks.optimal_field_count }}</div>
+</section>
+
+{# --- Appendix F: Form Design Guidelines --- #}
+{% if form_best_practices.design_guidelines %}
+<section class="cm-deliverable" id="deliverable-f">
+  <div class="cm-deliverable-header">
+    <div class="cm-deliverable-num">F</div>
+    <div>
+      <div class="cm-deliverable-title">表单设计最佳实践</div>
+      <div class="cm-deliverable-subtitle">Appendix F: Form Design Best Practices with Benchmarks</div>
+    </div>
+  </div>
+  <div class="cm-guideline-list">
+    {% for g in form_best_practices.design_guidelines %}
+    <div class="cm-guideline-item">
+      <div class="cm-guideline-check">&#10003;</div>
+      <div>
+        <div class="cm-guideline-text">{{ g.guideline }}</div>
+        <div class="cm-guideline-bench">{{ g.benchmark }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% if form_best_practices.spam_benchmarks %}
+  <div class="cm-conversion-callout" style="margin-top:1.2em;">
+    <div class="cm-conversion-callout-title">Spam Protection Data</div>
+    无保护表单平均垃圾率: {{ form_best_practices.spam_benchmarks.unprotected_spam_rate }} |
+    reCAPTCHA v3 拦截率: {{ form_best_practices.spam_benchmarks.recaptcha_v3_block_rate }} |
+    Cloudflare Turnstile 拦截率: {{ form_best_practices.spam_benchmarks.turnstile_block_rate }}
+    <div style="font-size:7pt; color:var(--text-tertiary); margin-top:0.2em;">来源: {{ form_best_practices.spam_benchmarks.source }}</div>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endif %}
+
+{# ==== Ecosystem Readiness ==== #}
+{% if readiness_items %}
+<section id="readiness" class="page-break">
+  <h2>
+    生态就绪度
+    <span class="cm-section-sub">Ecosystem Readiness</span>
+  </h2>
+  <div class="cm-readiness">
+    {% for item in readiness_items %}
+    <div class="cm-readiness-card {{ item.status }}">
+      <div class="cm-readiness-status">
+        {% if item.status == 'ready' %}
+        <span class="readiness-dot readiness-dot-ready"></span>
+        {% elif item.status == 'not-ready' %}
+        <span class="readiness-dot readiness-dot-not-ready"></span>
+        {% else %}
+        <span class="readiness-dot readiness-dot-partial"></span>
+        {% endif %}
+      </div>
+      <div class="cm-readiness-name">{{ item.name }}</div>
+      <div class="cm-readiness-desc">{{ item.description }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{# ==== Methodology & Disclosure ==== #}
+<section id="methodology" style="margin-top:2em;">
+  <h2>
+    方法论与披露
+    <span class="cm-section-sub">Methodology &amp; Disclosure</span>
+  </h2>
+
+  <h3>检测方法</h3>
+  <ul class="small">
+    <li>静态 HTML 分析 (DOM 结构、元素检测、正则匹配)</li>
+    <li>页面性能 API (Core Web Vitals: TTFB, LCP, FCP)</li>
+    <li>DNS 解析与 IP 地理定位 (ipinfo.io)</li>
+    <li>HTTP 响应头检测 (CDN 识别、SSL/TLS 协议、HTTP/2 ALPN 协商)</li>
+  </ul>
+
+  <h3>未覆盖范围</h3>
+  <ul class="small">
+    <li>JavaScript 动态执行与 SPA 渲染内容 (仅分析静态 HTML)</li>
+    <li>标签管理容器规则与触发器配置</li>
+    <li>服务端追踪 (Server-Side Tagging) 与数据管道</li>
+    <li>分析账户级配置 (转化目标、受众、出价策略)</li>
+    <li>实际表单提交流程与后端验证逻辑</li>
+  </ul>
+
+  <div class="cm-method-note">
+    本报告基于外部可观测数据，部分检测项需要账户权限才能完整验证。建议配合账户级审计使用。
+  </div>
+</section>
+
+{# ==== Next Steps ==== #}
+<section id="next">
+  <div class="cm-next-steps">
+    <h2>下一步 · Next Steps</h2>
+    <p>{{ next_steps_text | default('如需协助实施以上建议，请联系我们的技术团队。') | safe }}</p>
+    {% if contact_email or contact_wechat or contact_phone %}
+    <div class="cm-next-steps-row">
+      {% if contact_email %}
+      <div><div class="cm-next-label">Email</div>{{ contact_email }}</div>
+      {% endif %}
+      {% if contact_wechat %}
+      <div><div class="cm-next-label">WeChat</div>{{ contact_wechat }}</div>
+      {% endif %}
+      {% if contact_phone %}
+      <div><div class="cm-next-label">Phone</div>{{ contact_phone }}</div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<div style="margin-top:2em; text-align:center; font-size:8pt; color:var(--text-tertiary);">
+  <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--accent); margin-bottom:0.5em;"></span>
+  <div>由 CanMarket 出品 · Run performance marketing without breaking your brand</div>
+</div>
+
+</body>
+</html>

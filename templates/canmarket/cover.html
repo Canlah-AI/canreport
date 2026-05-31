@@ -1,0 +1,33 @@
+<section class="cm-cover">
+  <div class="cm-cover-top">
+    <div class="cm-wordmark">
+      CanMarket<span class="cm-wordmark-dot">.</span>
+    </div>
+    <div class="cm-wordmark-sub">Brand Operating System</div>
+  </div>
+
+  <div class="cm-cover-center">
+    <div class="cm-cover-eyebrow">基础设施诊断报告</div>
+    <h1 class="cm-cover-title">Infrastructure Audit</h1>
+    <div class="cm-cover-rule"></div>
+    <div class="cm-cover-client">
+      <div class="cm-cover-brand">{{ brand_name }}</div>
+      {% if target_url %}<div class="cm-cover-url">{{ target_url }}</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="cm-cover-meta">
+    <div class="cm-cover-meta-row">
+      <span class="cm-cover-meta-label">报告日期 · Date</span>
+      <span class="cm-cover-meta-val">{{ audit_date }}</span>
+    </div>
+    <div class="cm-cover-meta-row">
+      <span class="cm-cover-meta-label">目标市场 · Markets</span>
+      <span class="cm-cover-meta-val">{{ target_markets | default('全球') }}</span>
+    </div>
+    <div class="cm-cover-meta-row">
+      <span class="cm-cover-meta-label">报告编制 · Prepared by</span>
+      <span class="cm-cover-meta-val">CanMarket</span>
+    </div>
+  </div>
+</section>

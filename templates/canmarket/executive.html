@@ -1,0 +1,80 @@
+<section class="cm-executive" id="exec">
+  <h2>
+    执行摘要
+    <span class="cm-section-sub">Executive Summary</span>
+  </h2>
+
+  <div class="cm-exec-hero">
+    {# ---- Score Gauge (SVG ring, works in WeasyPrint + Playwright) ---- #}
+    <div class="cm-gauge-wrap">
+      {% set circumference = 339 %}
+      {% set dash = ((overall_score / 100) * circumference) | int %}
+      <svg width="124" height="124" viewBox="0 0 120 120">
+        <circle cx="60" cy="60" r="54" fill="none" stroke="#E8EBF0" stroke-width="10"/>
+        <circle cx="60" cy="60" r="54" fill="none" stroke="#2563EB" stroke-width="10"
+                stroke-dasharray="{{ dash }} {{ circumference }}"
+                stroke-linecap="round"
+                transform="rotate(-90 60 60)"/>
+        <text x="60" y="58" text-anchor="middle" font-family="Inter, sans-serif" font-size="34" font-weight="700" fill="#0F172A">{{ overall_score }}</text>
+        <text x="60" y="78" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="#94A3B8" letter-spacing="0.5">/ 100</text>
+      </svg>
+      <div class="cm-gauge-caption">综合评分 · Overall Score</div>
+    </div>
+
+    {# ---- Severity Pills ---- #}
+    <div class="cm-exec-stats">
+      <div class="cm-severity-summary">
+        {% if p0_count %}
+        <span class="cm-sev-pill sev-p0">
+          <span class="sev-dot"></span> P0 紧急 <strong>{{ p0_count }}</strong>
+        </span>
+        {% endif %}
+        {% if p1_count %}
+        <span class="cm-sev-pill sev-p1">
+          <span class="sev-dot"></span> P1 重要 <strong>{{ p1_count }}</strong>
+        </span>
+        {% endif %}
+        {% if p2_count %}
+        <span class="cm-sev-pill sev-p2">
+          <span class="sev-dot"></span> P2 建议 <strong>{{ p2_count }}</strong>
+        </span>
+        {% endif %}
+        {% if pass_count %}
+        <span class="cm-sev-pill sev-pass">
+          <span class="sev-dot"></span> 通过 <strong>{{ pass_count }}</strong>
+        </span>
+        {% endif %}
+      </div>
+
+      {# ---- Leakage Risk ---- #}
+      {% if leakage_risk %}
+      <div class="cm-leakage-box leakage-{{ leakage_risk }}">
+        <span class="cm-leakage-bar"></span>
+        <div class="cm-leakage-content">
+          <div class="cm-leakage-title">广告预算追踪风险 · {{ leakage_risk | upper }}</div>
+          <div class="cm-leakage-desc">{{ leakage_description | safe }}</div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ---- Top Actions ---- #}
+  {% if top_actions %}
+  <div class="cm-top-actions">
+    <h3>优先行动项 · Top Actions</h3>
+    {% for action in top_actions[:3] %}
+    <div class="cm-action-card">
+      <span class="cm-action-num">{{ loop.index }}</span>
+      <div class="cm-action-body">
+        <div class="cm-action-title">{{ action.title }}</div>
+        <div class="cm-action-impact">{{ action.impact }}</div>
+      </div>
+      {% if action.effort %}
+      <span class="cm-effort-tag">{{ action.effort }}</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
