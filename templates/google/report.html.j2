@@ -624,6 +624,9 @@
     <li class="toc-item"><a href="#mod-{{ loop.index }}">{{ mod.title_zh }}</a></li>
     {% endfor %}
     <li class="toc-item"><a href="#readiness">Google 生态就绪度</a></li>
+    {% for ap in appendix %}
+    <li class="toc-item"><a href="#geo-appendix-{{ loop.index }}">{{ ap.title }}</a></li>
+    {% endfor %}
     {% if recommendations and recommendations.blog_content_matrix %}
     <li class="toc-item"><a href="#deliverable-a">附件 A: 内容矩阵模板</a></li>
     {% endif %}
@@ -750,7 +753,7 @@
 {% endfor %}
 
 {# ==== APPENDIX DIVIDER ==== #}
-{% if recommendations and (recommendations.blog_content_matrix or recommendations.whitepaper_template or recommendations.product_page_template) %}
+{% if appendix or (recommendations and (recommendations.blog_content_matrix or recommendations.whitepaper_template or recommendations.product_page_template)) %}
 <section class="page-break" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:8cm; margin:2em 0;">
   <div style="display:flex; justify-content:center; gap:8px; margin-bottom:1.2em;">
     <span style="width:8px;height:8px;display:inline-block;border-radius:50%;background:var(--g-blue);"></span>
@@ -759,12 +762,38 @@
     <span style="width:8px;height:8px;display:inline-block;border-radius:50%;background:var(--g-green);"></span>
   </div>
   <div style="font-size:20pt; font-weight:700; color:var(--text-primary); letter-spacing:0.02em;">附件 Appendix</div>
-  <div style="font-size:10pt; color:var(--text-secondary); margin-top:0.5em;">以下为可直接复用的模板与最佳实践</div>
+  <div style="font-size:10pt; color:var(--text-secondary); margin-top:0.5em;">{% if appendix %}以下附件均由本次探测的真实数据生成 — 买家查询、AI 引用战场、待补结构化数据与 90 天 GEO 路线图{% else %}以下为可直接复用的模板与最佳实践{% endif %}</div>
   <div style="width:80px; height:3px; margin-top:1.5em; background:linear-gradient(90deg, var(--g-blue) 25%, var(--g-red) 25%, var(--g-red) 50%, var(--g-yellow) 50%, var(--g-yellow) 75%, var(--g-green) 75%); border-radius:2px;"></div>
 </section>
 {% endif %}
 
-{# ==== EMBEDDED DELIVERABLES ==== #}
+{# ==== GEO APPENDICES (data-driven, from off-site probes) ==== #}
+{% for ap in appendix %}
+<section class="eac-deliverable" id="geo-appendix-{{ loop.index }}">
+  <div class="eac-deliverable-header">
+    <div>
+      <div class="eac-deliverable-title">{{ ap.title }}</div>
+      {% if ap.subtitle %}<div class="eac-deliverable-subtitle">{{ ap.subtitle }}</div>{% endif %}
+    </div>
+  </div>
+  {% if ap.body_html %}<div class="eac-module-summary">{{ ap.body_html | safe }}</div>{% endif %}
+  {% if ap.table %}
+  <table class="eac-matrix-table">
+    {% if ap.table_headers %}
+    <thead><tr>{% for h in ap.table_headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+    {% endif %}
+    <tbody>
+      {% for row in ap.table %}
+      <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if ap.note %}<p class="small muted" style="margin-top:0.6em;">{{ ap.note }}</p>{% endif %}
+</section>
+{% endfor %}
+
+{# ==== EMBEDDED DELIVERABLES (legacy ecommerce templates — only if probe still emits them) ==== #}
 {# --- Appendix A: Content Matrix (from trust probe) --- #}
 {% if recommendations and recommendations.blog_content_matrix %}
 {% set matrix = recommendations.blog_content_matrix %}

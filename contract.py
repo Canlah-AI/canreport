@@ -1435,20 +1435,287 @@ def build_contract(base: dict, offsite: dict[str, dict]) -> dict:
     data["p0_count"], data["p1_count"], data["p2_count"], data["pass_count"] = p0, p1, p2, passes
     data["overall_score"] = max(0, 100 - (p0 * 25 + p1 * 10 + p2 * 3))
 
-    # Re-rank top actions across all findings
-    all_findings: list[dict] = []
-    for mod in data["modules"]:
-        all_findings.extend(mod.get("findings", []))
-    order = {"P0": 0, "P1": 1, "P2": 2, "PASS": 3}
-    all_findings.sort(key=lambda f: order.get(f.get("severity", "").upper(), 9))
-    data["top_actions"] = [{
-        "title": f.get("action_zh", f.get("title_zh", "")),
-        "impact": f"{f.get('severity', 'P1')} · {f.get('impact_zh', '')}",
-        "effort": "30 分钟" if f.get("code_snippet") else "需评估",
-    } for f in all_findings[:3]]
+    # Re-rank top actions across all findings — leverage-aware, GEO-first.
+    data["top_actions"] = _build_top_actions(data["modules"])
+
+    # GEO appendices (replaces the legacy generic-ecommerce blog/whitepaper/
+    # product-page templates). Built from the live off-site probe data.
+    data["appendix"] = _build_geo_appendix(offsite, data["modules"])
 
     data["next_steps_text"] = (
         f"本报告中标记为 P0 的 {p0} 个问题建议在 7 天内优先处理。"
         f"如需协助实施，请联系我们的技术团队。")
     data["_offsite_raw"] = offsite
     return data
+
+
+# ---------------------------------------------------------------------------
+# Synthesis: leverage-aware top actions
+# ---------------------------------------------------------------------------
+
+# Module/probe leverage tiers. Within a severity band, GEO/AI-citation wins
+# over technical SEO, which wins over generic on-site EAC content. This is what
+# stops a stale on-site P1 (e.g. a content-matrix template) from crowding out
+# the high-leverage GEO findings.
+_PROBE_LEVERAGE = {
+    "ai_citation": 0,          # the GEO money shot
+    "perplexity_browser": 0,
+    "prompts": 1,              # query universe / buyer prompts
+    "schema": 1,               # entity / AI-readiness
+    "backlink": 2, "news": 2,  # authority signals
+    "reputation": 2,
+    "community": 2,
+    "social": 2, "nap": 2,
+    "crawlability": 3,         # technical SEO
+    "roadmap": 4,              # the sequenced plan (referenced, not a quick win)
+    "gsc": 5,
+}
+# On-site EAC modules from the base audit carry no _source_probe; treat as the
+# lowest-leverage tier so they never outrank GEO findings of equal severity.
+_ONSITE_LEVERAGE = 6
+
+_AI_CITATION_RULE_PREFIX = "AICITE"
+
+
+def _leverage(f: dict) -> int:
+    probe = f.get("_source_probe")
+    if probe is None:
+        return _ONSITE_LEVERAGE
+    return _PROBE_LEVERAGE.get(probe, _ONSITE_LEVERAGE - 1)
+
+
+def _module_label(f: dict) -> str:
+    """Short human label for which module a finding came from.
+
+    Prefers _source_probe; falls back to the rule_id prefix so findings that
+    don't stamp a probe (e.g. AICITE-001) still get the right module label
+    instead of the generic on-site EAC fallback.
+    """
+    probe = f.get("_source_probe")
+    labels = {
+        "ai_citation": "AI 引用力",
+        "perplexity_browser": "AI 引用力",
+        "prompts": "查询宇宙",
+        "schema": "结构化数据",
+        "backlink": "站外权威",
+        "news": "站外权威",
+        "reputation": "声誉",
+        "community": "社区提及",
+        "social": "社交/NAP",
+        "nap": "社交/NAP",
+        "crawlability": "技术 SEO",
+        "roadmap": "90 天路线图",
+        "gsc": "Search Console",
+    }
+    if probe in labels:
+        return labels[probe]
+    rule_id = str(f.get("rule_id", ""))
+    rule_prefix = {
+        "AICITE": "AI 引用力",
+        "PROMPTS": "查询宇宙",
+        "SCHEMA": "结构化数据",
+        "OFFSITE": "站外权威",
+        "NEWS": "站外权威",
+        "REP": "声誉",
+        "COMM": "社区提及",
+        "SOCIAL": "社交/NAP",
+        "NAP": "社交/NAP",
+        "CRAWL": "技术 SEO",
+        "ROADMAP": "90 天路线图",
+        "GSC": "Search Console",
+    }
+    for prefix, label in rule_prefix.items():
+        if rule_id.startswith(prefix):
+            return label
+    return "站内 EAC"
+
+
+def _build_top_actions(modules: list[dict]) -> list[dict]:
+    """Pick the 3-5 highest-leverage actions across ALL modules.
+
+    Ranking key: (severity, leverage-tier, module-order). P0 first; within a
+    severity band GEO/AI-citation outranks technical, which outranks on-site
+    EAC content. The AI-citation P0 (0% citation / SoV 0% while competitors
+    dominate) is force-promoted to #1 whenever present, so the report always
+    leads with the GEO money shot — never with stale product-page advice.
+    """
+    sev_order = {"P0": 0, "P1": 1, "P2": 2, "PASS": 9}
+    ranked: list[tuple] = []
+    for mi, mod in enumerate(modules):
+        for fi, f in enumerate(mod.get("findings", []) or []):
+            sev = f.get("severity", "").upper()
+            if sev == "PASS":
+                continue
+            ranked.append(((sev_order.get(sev, 8), _leverage(f), mi, fi), f))
+    ranked.sort(key=lambda x: x[0])
+
+    # Force the AI-citation P0 to the very front if it exists anywhere.
+    def _is_ai_p0(f: dict) -> bool:
+        return (f.get("severity", "").upper() == "P0"
+                and str(f.get("rule_id", "")).startswith(_AI_CITATION_RULE_PREFIX))
+
+    ordered = [f for _, f in ranked]
+    ai_p0 = next((f for f in ordered if _is_ai_p0(f)), None)
+    if ai_p0 is not None:
+        ordered = [ai_p0] + [f for f in ordered if f is not ai_p0]
+
+    # Keep 3-5 items: always include every P0, then fill with the next-highest
+    # leverage findings up to 5 (min 3 when available).
+    p0s = [f for f in ordered if f.get("severity", "").upper() == "P0"]
+    picks: list[dict] = []
+    seen: set[int] = set()
+    for f in p0s + ordered:
+        if id(f) in seen:
+            continue
+        seen.add(id(f))
+        picks.append(f)
+        if len(picks) >= 5:
+            break
+    picks = picks[: max(3, min(5, len(picks)))]
+
+    actions = []
+    for f in picks:
+        sev = f.get("severity", "P1")
+        impact_zh = f.get("impact_zh", "")
+        actions.append({
+            "title": f.get("title_zh") or f.get("action_zh", ""),
+            "impact": f"{sev} · {_module_label(f)} · {_trunc(impact_zh, 80)}",
+            "effort": "30 分钟" if f.get("code_snippet") else "需评估",
+        })
+    return actions
+
+
+# ---------------------------------------------------------------------------
+# Synthesis: GEO appendices (brand-agnostic, data-driven)
+# ---------------------------------------------------------------------------
+
+def _build_geo_appendix(offsite: dict[str, dict],
+                        modules: list[dict]) -> list[dict]:
+    """Build GEO-relevant appendices from live probe data.
+
+    Replaces the legacy generic out-of-the-box ecommerce templates (blog
+    content matrix / whitepaper / product-page) with appendices grounded in
+    THIS site's actual data:
+      A. Buyer-intent prompts & long-tail (from prompt_discovery)
+      B. AI-citation queries competitors win + top cited competitors
+      C. Missing schema types to add (citation-bait structured data)
+      D. The sequenced 90-day GEO roadmap (mirrors the roadmap module)
+    Each item conforms to the template appendix contract:
+      {title, subtitle?, body_html?, table_headers?, table?, note?}
+    Brand-agnostic; emits only the appendices it has data for.
+    """
+    appendix: list[dict] = []
+
+    # --- A. Buyer-intent prompts & long-tail queries ---
+    prompts = offsite.get("prompts", {}) or {}
+    buyer = prompts.get("buyer_prompts", []) or []
+    long_tail = prompts.get("long_tail", []) or []
+
+    def _q(item: Any) -> str:
+        if isinstance(item, dict):
+            return str(item.get("prompt", item.get("query", "")))
+        return str(item)
+
+    def _cat(item: Any) -> str:
+        if isinstance(item, dict):
+            c = item.get("category", "")
+            return _CATEGORY_FRIENDLY.get(c, c)
+        return ""
+
+    if buyer or long_tail:
+        rows = []
+        for it in buyer[:12]:
+            rows.append(["买家意图 Buyer", _trunc(_q(it), 70), _cat(it)])
+        for it in long_tail[:10]:
+            rows.append(["长尾 Long-tail", _trunc(_q(it), 70), _cat(it)])
+        appendix.append({
+            "title": "附件 A — 买家意图与长尾查询清单",
+            "subtitle": "AI 与搜索引擎里客户真实会问的问题，按意图分类",
+            "body_html": (
+                "<p>下列查询来自对本品类买家旅程的探测，是 GEO 内容选题的<strong>事实依据</strong>"
+                "—— 每一条都应有一个能被 AI 引用的落地页或段落。</p>"),
+            "table_headers": ["类型 Type", "查询 Query", "意图类别 Category"],
+            "table": rows,
+            "note": "建议优先覆盖 comparison / recommendation 两类高转化意图查询。",
+        })
+
+    # --- B. AI-citation queries competitors win + top cited competitors ---
+    ai = offsite.get("ai_citation", {}) or {}
+    queries_run = ai.get("queries_run", []) or []
+    stats = ai.get("summary_stats", {}) or {}
+    top_comp = stats.get("top_competitors_cited", []) or []
+    sov = stats.get("sov_percent", 0.0) or 0.0
+    if queries_run or top_comp:
+        q_rows = [[i, _trunc(q, 90)] for i, q in enumerate(queries_run[:15], 1)]
+        comp_rows = []
+        for c in top_comp[:10]:
+            dom = c.get("domain", "") if isinstance(c, dict) else str(c)
+            cnt = c.get("citation_count", c.get("count", "")) if isinstance(c, dict) else ""
+            comp_rows.append([_trunc(dom, 50), str(cnt)])
+        body = (
+            f"<p>本品牌当前在 AI 回答中的声量占比（SoV）为 <strong>{round(sov)}%</strong>。"
+            "下表是实测中向 AI 提出的查询；竞品在这些查询上赢得引用，"
+            "应作为 citation-bait 内容的<strong>直接打击目标</strong>。</p>")
+        item = {
+            "title": "附件 B — AI 引用战场：实测查询与被引竞品",
+            "subtitle": "竞品在 AI 回答里垄断的查询 —— 你的内容要逐条夺回",
+            "body_html": body,
+            "table_headers": ["#", "实测 AI 查询 Query Run"],
+            "table": q_rows,
+        }
+        if comp_rows:
+            comp_html = (
+                "<p style='margin-top:12px'><strong>被 AI 引用的竞品域名：</strong></p>"
+                "<ul>" + "".join(
+                    f"<li>{_trunc(d, 50)}{('（被引 ' + cnt + ' 次）') if cnt else ''}</li>"
+                    for d, cnt in comp_rows) + "</ul>")
+            item["body_html"] = body + comp_html
+        item["note"] = "为每条查询产出 1 篇对标竞品的对比/指南长文 + 结构化数据。"
+        appendix.append(item)
+
+    # --- C. Missing schema types (citation-bait structured data templates) ---
+    schema = offsite.get("schema", {}) or {}
+    sch_findings = schema.get("findings", []) or []
+    sch_rows = []
+    for f in sch_findings:
+        if not isinstance(f, dict):
+            continue
+        t = f.get("type", "")
+        req = f.get("required_missing", []) or []
+        rec = f.get("recommended_missing", []) or []
+        if not (req or rec):
+            continue
+        sch_rows.append([
+            _trunc(t, 30),
+            _trunc("、".join(req), 50) if req else "—",
+            _trunc("、".join(rec), 50) if rec else "—",
+        ])
+    if sch_rows:
+        appendix.append({
+            "title": "附件 C — 待补充的结构化数据 (Schema) 模板",
+            "subtitle": "让 AI 与富媒体结果能读懂你的实体与产品",
+            "body_html": (
+                "<p>下列 Schema 类型缺少必填或推荐字段。补齐后可提升被 AI 引用、"
+                "进入富媒体结果（Rich Results）与知识图谱的概率。</p>"),
+            "table_headers": ["Schema 类型", "缺失必填字段", "缺失推荐字段"],
+            "table": sch_rows,
+            "note": "用 JSON-LD 注入每个页面的 <head>，部署后用 Rich Results Test 验证。",
+        })
+
+    # --- D. The sequenced 90-day GEO roadmap (mirror the roadmap module) ---
+    roadmap = next(
+        (m for m in modules if m.get("title_en") == "90-Day GEO Roadmap"), None)
+    if roadmap and roadmap.get("data_table", {}).get("rows"):
+        dt = roadmap["data_table"]
+        appendix.append({
+            "title": "附件 D — 90 天 GEO 执行路线图",
+            "subtitle": "把全部诊断综合为按月排序的可执行计划（顺序而非并行）",
+            "body_html": (
+                "<p>本路线图是上述所有诊断的<strong>综合产物</strong>："
+                "先修基础、再用 citation-bait 抢 AI 引用、最后建权威与实体。</p>"),
+            "table_headers": dt.get("headers", []),
+            "table": dt.get("rows", []),
+            "note": "每月末复测 AI 引用率与 Schema/NAP 评分以验证进展。",
+        })
+
+    return appendix
