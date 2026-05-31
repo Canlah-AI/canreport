@@ -75,8 +75,17 @@ _ENGINE_FRIENDLY = {
     "google_serp": "Google 搜索结果",
     "google_ai_overview": "Google AI Overview",
     "google_answer_box": "Google Answer Box",
+    "google_knowledge_graph": "Google 知识图谱",
     "gemini_search": "Gemini AI 回答",
     "openai_chatgpt": "ChatGPT 回答",
+}
+
+_CATEGORY_FRIENDLY = {
+    "discovery": "发现型 Discovery",
+    "comparison": "对比型 Comparison",
+    "recommendation": "推荐型 Recommendation",
+    "factual": "事实型 Factual",
+    "uncategorized": "未分类",
 }
 
 # Telco/healthcare/banking domains that signal a STALE generic-query run.
@@ -93,8 +102,13 @@ _STALE_GARBAGE_DOMAINS = {
 def _module_ai_citation(ai: dict, brand_name: str = "") -> dict:
     """AI Citation Visibility — the GEO money shot.
 
-    Renders TWO tables: per-engine citation scorecard + top competitors cited.
-    Severity P0 when brand citation rate is 0% while competitors dominate.
+    Surfaces the richer live_ai_search summary_stats: multi-run averaged
+    citation rate, Share of Voice %, honest per-engine scorecard (incl.
+    "not_present" engines + a backlog note for ChatGPT/Perplexity/Claude),
+    sentiment, dead/hallucinated-citation check, and prompt-category breakdown.
+
+    Severity P0 when brand citation rate is 0% while competitors dominate —
+    now framed with SoV% + the multi-run average to make it bulletproof.
     """
     brand = ai.get("brand_name") or brand_name or "本品牌"
     stats = ai.get("summary_stats", {}) or {}
@@ -102,11 +116,27 @@ def _module_ai_citation(ai: dict, brand_name: str = "") -> dict:
     queries_run = ai.get("queries_run", []) or []
     top_comp = stats.get("top_competitors_cited", []) or []
 
-    # Per-engine rows (engines are the dict keys in summary_stats that hold dicts)
-    engine_keys = [k for k, v in stats.items() if isinstance(v, dict)]
-    total_rows = sum(stats[e].get("queries_tested", 0) for e in engine_keys)
-    total_cited = sum(stats[e].get("queries_cited", 0) for e in engine_keys)
-    blended_rate = round(total_cited / total_rows, 4) if total_rows else 0.0
+    # New nested contract: every engine lives under per_engine, always present
+    # (status "tested" or honest "not_present").
+    per_engine = stats.get("per_engine", {}) or {}
+    runs_n = stats.get("runs_per_generative_engine", 1) or 1
+    backlog = stats.get("backlog_engines", []) or []
+    sov = stats.get("sov_percent", 0.0) or 0.0
+    sentiment = stats.get("overall_sentiment", "n/a (not mentioned)")
+    sent_break = stats.get("sentiment_breakdown", {}) or {}
+    halluc = int(stats.get("hallucination_count", 0) or 0)
+    dead_links = stats.get("dead_citations", []) or []
+    by_cat = stats.get("by_category", {}) or {}
+
+    # Blended citation rate = mean of per-engine citation_rate across TESTED engines
+    # (None = not_present, excluded). Generative rates are already multi-run avgs.
+    tested = {e: s for e, s in per_engine.items()
+              if isinstance(s, dict) and s.get("status") == "tested"}
+    rates = [s.get("citation_rate") or 0.0 for s in tested.values()
+             if s.get("citation_rate") is not None]
+    blended_rate = round(sum(rates) / len(rates), 4) if rates else 0.0
+    total_cited = sum(1 for r in results if r.get("target_cited"))
+    total_rows = len(results)
     score = int(round(blended_rate * 100))
     if blended_rate == 0:
         grade = "F"
@@ -119,26 +149,43 @@ def _module_ai_citation(ai: dict, brand_name: str = "") -> dict:
     else:
         grade = "A"
 
-    def _rate_status(rate: float) -> str:
+    def _rate_status(rate) -> str:
+        if rate is None:
+            return "⚪"
         if rate == 0:
             return "🔴 0%"
         if rate < 0.40:
             return "🟡"
         return "🟢"
 
-    # TABLE A — per-engine scorecard
-    table_a_rows = [["── 各引擎引用记分卡 ──", "", "", "", "", ""]]
-    table_a_rows.append(["引擎 Engine", "测试查询数", "被引用次数", "引用率 %", "平均排名", "最佳排名"])
-    for e in engine_keys:
-        s = stats[e]
-        rate = s.get("citation_rate", 0) or 0
+    # TABLE A — honest per-engine scorecard (ALL engines, incl. not_present)
+    table_a_rows = [["── 各引擎引用记分卡（含未出现引擎）──", "", "", "", ""]]
+    table_a_rows.append(["引擎 Engine", "状态", "测试查询数", "引用率 %", "最佳排名"])
+    for e, s in per_engine.items():
+        if not isinstance(s, dict):
+            continue
+        friendly = _ENGINE_FRIENDLY.get(e, e)
+        if s.get("status") != "tested":
+            table_a_rows.append([friendly, "⚪ 未出现 not_present", "0", "—", "未出现"])
+            continue
+        rate = s.get("citation_rate")
+        gen_tag = f"（{s.get('runs', runs_n)} 次跑取平均）" if s.get("generative") else ""
+        rate_cell = "—" if rate is None else f"{_rate_status(rate)} {round(rate * 100)}%{gen_tag}"
+        best = s.get("best_position")
         table_a_rows.append([
-            _ENGINE_FRIENDLY.get(e, e),
+            friendly,
+            "✅ 已测试 tested",
             str(s.get("queries_tested", 0)),
-            str(s.get("queries_cited", 0)),
-            f"{_rate_status(rate)} {round(rate * 100)}%",
-            str(s.get("avg_position")) if s.get("avg_position") is not None else "—",
-            str(s.get("best_position")) if s.get("best_position") is not None else "未出现",
+            rate_cell,
+            str(best) if best is not None else "未出现",
+        ])
+    # Backlog engines — honest "not yet wired" note in the same table
+    if backlog:
+        table_a_rows.append([
+            "backlog（待接入）",
+            "🕒 ChatGPT / Perplexity / Claude",
+            "—", "—",
+            _trunc(" · ".join(backlog), 48),
         ])
 
     # Which engines mentioned each competitor (scan results)
@@ -149,15 +196,53 @@ def _module_ai_citation(ai: dict, brand_name: str = "") -> dict:
             comp_engines.setdefault(c, set()).add(eng)
 
     # TABLE B — top competitors cited instead (the money shot)
-    table_b_rows = [["── 反被 AI 推荐的竞品 ──", "", "", ""]]
-    table_b_rows.append(["排名 #", "竞品域名 Competitor", "被 AI 引用次数", "出现引擎"])
+    table_b_rows = [["── 反被 AI 推荐的竞品 ──", "", "", "", ""]]
+    table_b_rows.append(["排名 #", "竞品域名 Competitor", "被 AI 引用次数", "出现引擎", ""])
     stale_detected = False
     for i, c in enumerate(top_comp[:5], 1):
         dom = c.get("domain", "")
         if dom in _STALE_GARBAGE_DOMAINS:
             stale_detected = True
         engines = " · ".join(sorted(comp_engines.get(dom, []))) or "—"
-        table_b_rows.append([str(i), dom, str(c.get("appearances", 0)), engines])
+        table_b_rows.append([str(i), dom, str(c.get("appearances", 0)), engines, ""])
+
+    # TABLE C — prompt-category citation breakdown
+    table_c_rows: list[list[str]] = []
+    if by_cat:
+        table_c_rows.append(["── 按提问类型的引用率 ──", "", "", "", ""])
+        table_c_rows.append(["提问类型 Category", "测试行数", "被引用", "引用率 %", ""])
+        for cat, cs in by_cat.items():
+            crate = cs.get("citation_rate", 0) or 0
+            table_c_rows.append([
+                _CATEGORY_FRIENDLY.get(cat, cat),
+                str(cs.get("rows_tested", 0)),
+                str(cs.get("rows_cited", 0)),
+                f"{_rate_status(crate)} {round(crate * 100)}%",
+                "",
+            ])
+
+    # TABLE D — sentiment + hallucination diagnostics
+    table_d_rows: list[list[str]] = []
+    mentioned = total_cited > 0 or sum(sent_break.values()) > 0
+    if mentioned or halluc or dead_links:
+        table_d_rows.append(["── 情感 + 事实性诊断 ──", "", "", "", ""])
+        if mentioned:
+            sent_label = {
+                "positive": "🟢 正面 positive", "neutral": "🟡 中性 neutral",
+                "negative": "🔴 负面 negative",
+            }.get(sentiment, sentiment)
+            table_d_rows.append([
+                "AI 提及情感", sent_label,
+                f"正 {sent_break.get('positive', 0)}",
+                f"中 {sent_break.get('neutral', 0)}",
+                f"负 {sent_break.get('negative', 0)}",
+            ])
+        dead_cnt = len(dead_links)
+        halluc_status = "🟢 全部可达" if dead_cnt == 0 else f"🔴 {dead_cnt} 个失效/幻觉"
+        table_d_rows.append([
+            "引用链接事实性核查", halluc_status,
+            f"失效/幻觉 {halluc}", "—", "—",
+        ])
 
     findings: list[dict] = []
 
@@ -171,28 +256,30 @@ def _module_ai_citation(ai: dict, brand_name: str = "") -> dict:
             evidence=f"检测到过期竞品: {', '.join(c.get('domain','') for c in top_comp[:3])}",
             confidence=0.6))
 
-    # P0 — zero citation while competitors dominate
+    # P0 — zero citation while competitors dominate (now SoV% + multi-run framed)
     if total_rows > 0 and total_cited == 0 and top_comp:
         top3 = ", ".join(c.get("domain", "") for c in top_comp[:3])
+        comp_total = sum(c.get("appearances", 0) for c in top_comp)
         findings.append(_finding(
             "P0", "0% AI 引用率 — 竞品垄断 AI 推荐",
             (f"当潜在客户问 ChatGPT/Gemini/Google AI 关于本品类的买家问题时，AI 引擎在 "
              f"{total_rows} 次结果中从未提及 {brand}，却反复推荐 [{top3}]。"
-             f"在 AI 驱动的购买决策中，你的品牌是隐形的 — 这些流量 100% 流向竞品。"),
+             f"声量占比(SoV) {sov}% — 在 AI 驱动的购买决策中你的品牌几乎隐形，这些流量近乎 100% 流向竞品。"
+             f"生成式引擎已做 {runs_n} 次跑取平均，零引用不是抽样噪声，是结构性缺位。"),
             ("建立 GEO 资产：结构化产品数据(Schema.org Product)、第三方评测/对比内容、"
-             "可被 AI 抓取的 citation-bait 数据页，目标 90 天内在至少 1 个引擎获得引用。"),
+             "可被 AI 抓取的 citation-bait 数据页，目标 90 天内在至少 1 个引擎获得引用，SoV 提升至 ≥10%。"),
             "AICITE-001", "live_ai_search",
-            evidence=(f"各引擎引用率均为 0%（共 {total_rows} 行结果）；"
-                      f"竞品 {len(top_comp)} 个被反复引用。"),
+            evidence=(f"已测试引擎引用率均为 0%（共 {total_rows} 行结果，{runs_n} 次跑取平均）；"
+                      f"SoV {sov}%；竞品 {len(top_comp)} 个共被引用 {comp_total} 次。"),
             confidence=0.9))
 
     # P1 — cited on some engines but absent from AI answers
-    serp = stats.get("google_serp", {})
-    ai_ov = stats.get("google_ai_overview", {})
-    gem = stats.get("gemini_search", {})
-    serp_cited = (serp.get("queries_cited", 0) or 0) > 0
-    ai_blind = ((ai_ov.get("queries_cited", 0) or 0) == 0
-                and (gem.get("queries_cited", 0) or 0) == 0)
+    serp = per_engine.get("google_serp", {}) or {}
+    ai_ov = per_engine.get("google_ai_overview", {}) or {}
+    gem = per_engine.get("gemini_search", {}) or {}
+    serp_cited = (serp.get("citation_rate") or 0) > 0
+    ai_blind = ((ai_ov.get("citation_rate") or 0) == 0
+                and (gem.get("citation_rate") or 0) == 0)
     if serp_cited and ai_blind:
         pos = serp.get("best_position")
         findings.append(_finding(
@@ -203,30 +290,57 @@ def _module_ai_citation(ai: dict, brand_name: str = "") -> dict:
             "AICITE-002", "live_ai_search",
             evidence=f"google_serp 已引用 (最佳第 {pos} 位)，但 AI Overview / Gemini 引用率 0%。"))
 
-    # P2 INFO — methodology transparency (queries tested)
+    # P1 — AI cited dead / hallucinated source URLs
+    if dead_links:
+        sample = ", ".join(_trunc(d.get("url", ""), 40) for d in dead_links[:3])
+        findings.append(_finding(
+            "P1", f"AI 引用了 {len(dead_links)} 个失效/幻觉链接",
+            (f"在核查的引用源 URL 中，{len(dead_links)} 个返回 404/无法访问 — AI 回答里出现了"
+             f"指向死链或不存在页面的引用。这会误导买家并削弱 AI 回答对你品类的可信度。"),
+            "向引擎可抓取的稳定 URL 提供权威结构化数据，挤掉这些失效来源。",
+            "AICITE-004", "live_ai_search",
+            evidence=f"失效引用示例: {sample}",
+            confidence=0.75))
+
+    # P2 INFO — methodology transparency (queries tested + multi-run)
     if queries_run:
         q_list = "\n".join(f"• {q}" for q in queries_run[:5])
         findings.append(_finding(
-            "P2", "测试的真实买家查询",
-            f"本模块以下列真实买家意图查询实测（非通用模板），证明方法论针对你的品类：\n{q_list}",
+            "P2", "测试的真实买家查询（多次跑取平均）",
+            (f"本模块以下列真实买家意图查询实测（非通用模板），生成式引擎每条查询跑 {runs_n} 次取平均，"
+             f"证明方法论针对你的品类且结果稳健：\n{q_list}"),
             "—",
             "AICITE-003", "live_ai_search",
-            evidence=f"共测试 {len(queries_run)} 条买家查询。"))
+            evidence=f"共测试 {len(queries_run)} 条买家查询 × {runs_n} 次跑（生成式引擎）。"))
 
     n_cited_comp = len(top_comp)
-    verdict = (f"在 {total_rows} 个买家意图查询结果中，AI 引擎引用 {brand} {total_cited} 次，"
-               f"而竞品被引用 {sum(c.get('appearances', 0) for c in top_comp)} 次。")
+    comp_total = sum(c.get("appearances", 0) for c in top_comp)
+    sent_clause = (f"，AI 提及情感为 {sentiment}"
+                   if (total_cited > 0 or sum(sent_break.values()) > 0)
+                   else "")
+    verdict = (f"在 {total_rows} 个买家意图查询结果中（生成式引擎 {runs_n} 次跑取平均），"
+               f"AI 引擎引用 {brand} {total_cited} 次，竞品被引用 {comp_total} 次，"
+               f"声量占比(SoV) {sov}%{sent_clause}。")
+
+    n_tested_engines = len(tested)
+    n_not_present = sum(1 for s in per_engine.values()
+                        if isinstance(s, dict) and s.get("status") != "tested")
 
     return {
         "icon": "🤖", "title_zh": "AI 引用力 — 当客户问 AI，你的品牌出现吗？",
         "title_en": "AI Citation Visibility — Do You Show Up When Customers Ask AI?",
         "score": max(0, min(100, score)),
         "grade_letter": grade,
-        "summary_html": (f"<p><strong>{score}/100 · 评级 {grade}</strong></p><p>{verdict}</p>"
-                         f"<p>实测 {len(engine_keys)} 个 AI 引擎，"
-                         f"{n_cited_comp} 个竞品反被推荐。</p>"),
-        "data_table": {"headers": ["引擎", "查询", "引用", "引用率", "平均排名", "最佳排名"],
-                       "rows": table_a_rows + table_b_rows},
+        "summary_html": (
+            f"<p><strong>{score}/100 · 评级 {grade} · 声量占比 SoV {sov}%</strong></p>"
+            f"<p>{verdict}</p>"
+            f"<p>实测 {n_tested_engines} 个 AI 引擎"
+            f"（另 {n_not_present} 个未出现、{len(backlog)} 个待接入：ChatGPT/Perplexity/Claude），"
+            f"{n_cited_comp} 个竞品反被推荐。引用链接事实性核查："
+            f"{('全部可达' if not dead_links else str(len(dead_links)) + ' 个失效/幻觉')}。</p>"),
+        "data_table": {
+            "headers": ["引擎/项目", "状态/值", "测试", "引用率/明细", "排名/补充"],
+            "rows": (table_a_rows + table_b_rows + table_c_rows + table_d_rows)},
         "findings": findings,
     }
 
