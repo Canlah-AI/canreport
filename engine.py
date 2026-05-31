@@ -16,13 +16,32 @@ returns an empty dict for that probe rather than aborting the whole run.
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import os
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 logger = logging.getLogger("engine")
+
+# Python interpreter that has camoufox installed (browser_ai_capture needs it;
+# the default python3 does NOT). Overridable via env for portability.
+SUPERSCRAPE_PY = os.environ.get(
+    "SUPERSCRAPE_PY",
+    str(Path.home() / "Desktop" / "Canlah+Marketing" / "code"
+        / "superscrape" / "venv" / "bin" / "python"))
+
+# crawlability_scan uses the Playwright SYNC api. Playwright-sync CRASHES when
+# driven from a ThreadPoolExecutor worker thread (Node driver EPIPE / "sync api
+# inside thread"). We therefore run it in a DEDICATED SUBPROCESS, never in the
+# pool — this both dodges the thread crash and isolates any Node-side crash from
+# the report process. Timeout is generous because it renders up to 80 pages.
+# Measured: a full 80-page Playwright crawl of a real Shopify site takes ~300s,
+# so the default timeout has headroom above that; it graceful-degrades on overrun.
+CRAWLABILITY_TIMEOUT_SEC = int(os.environ.get("CRAWLABILITY_TIMEOUT_SEC", "420"))
+BROWSER_AI_TIMEOUT_SEC = int(os.environ.get("BROWSER_AI_TIMEOUT_SEC", "120"))
 
 # (result_key, module_name, callable, needs_brand)
 # "ai_citation" uses a dedicated runner (run_ai_citation) instead of the generic
@@ -39,6 +58,15 @@ OFFSITE_PROBES: list[tuple[str, str, str, bool]] = [
     ("nap", "nap_consistency_scan", "probe", True),
     ("schema", "schema_validator", "probe", False),
     ("freshness", "content_freshness_scan", "probe", False),
+    # prompt_discovery: url + brand + industry_keywords (like news/backlink).
+    # Pure HTTP (Serper + autocomplete) so it's pool-safe.
+    ("prompts", "prompt_discovery", "probe", True),
+    # gsc_connector: url-only; never raises (returns awaiting_authorization CTA
+    # when no creds). Pure HTTP, pool-safe.
+    ("gsc", "gsc_connector", "probe", False),
+    # NOTE: "crawlability" is deliberately NOT here — it uses Playwright-sync
+    # which crashes in a pool worker thread. It runs via _run_crawlability in a
+    # dedicated subprocess, sequentially, in run_offsite_probes. See below.
 ]
 
 
@@ -230,9 +258,10 @@ def _load_probe_module(engine_root: Path, module_name: str):
     return mod
 
 
-# Probes whose probe() accepts a 3rd `industry_keywords` arg for entity
-# disambiguation (separating genuine brand mentions from same-name namesakes).
-_INDUSTRY_KEYWORD_PROBES = {"news", "backlink"}
+# Probes whose probe() accepts a 3rd `industry_keywords` arg. For news/backlink
+# it disambiguates same-name namesakes; for prompts it seeds long-tail/keyword
+# discovery with the detected product/industry terms.
+_INDUSTRY_KEYWORD_PROBES = {"news", "backlink", "prompts"}
 
 
 def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
@@ -261,6 +290,122 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
     except Exception as e:  # noqa: BLE001 — one probe failing must not abort the run
         logger.warning("off-site probe %s failed: %s", module_name, e)
         return key, {"_probe_status": "error", "_reason": str(e)[:300]}
+
+
+# ---------------------------------------------------------------------------
+# Subprocess probe runners (process isolation for crashy / venv-only probes)
+# ---------------------------------------------------------------------------
+# Both crawlability_scan (Playwright-sync) and browser_ai_capture (camoufox)
+# drive Node-backed browsers. Run them in a SEPARATE PROCESS so:
+#   1. Playwright-sync isn't in a ThreadPoolExecutor worker (which crashes), and
+#   2. a Node-side crash can't take down the whole report process.
+# The child probe writes its JSON result to a temp file (not stdout) so a noisy
+# Node teardown on stdout can't corrupt the payload, then hard-exits with
+# os._exit(0) before Node teardown can fire.
+
+# Inline child script: loads ONE probe by path under a unique module name (same
+# trick as _load_probe_module) and dumps its result to an out-file path.
+_SUBPROCESS_CHILD = (
+    "import sys, importlib.util, json, os\n"
+    "from pathlib import Path\n"
+    "root = Path(sys.argv[1]); mod_name = sys.argv[2]; out_path = sys.argv[3]\n"
+    "args = json.loads(sys.argv[4])\n"
+    "sys.path.append(str(root))\n"
+    "p = root / 'probes' / (mod_name + '.py')\n"
+    "spec = importlib.util.spec_from_file_location('_engine_probe_' + mod_name, p)\n"
+    "m = importlib.util.module_from_spec(spec); sys.modules[spec.name] = m\n"
+    "spec.loader.exec_module(m)\n"
+    "try:\n"
+    "    result = m.probe(*args)\n"
+    "    Path(out_path).write_text(json.dumps(result), encoding='utf-8')\n"
+    "    os._exit(0)\n"
+    "except Exception as e:\n"
+    "    Path(out_path).write_text(json.dumps(\n"
+    "        {'_probe_status': 'error', '_reason': str(e)[:300]}), encoding='utf-8')\n"
+    "    os._exit(0)\n"
+)
+
+
+def _run_probe_subprocess(engine_root: Path, module_name: str,
+                          probe_args: list, python_exe: str,
+                          timeout_sec: int) -> dict:
+    """Run a single probe in an isolated subprocess; return its dict or a
+    graceful-skip dict. Never raises.
+    """
+    import tempfile
+    out_fd, out_path = tempfile.mkstemp(suffix=".json", prefix=f"{module_name}_")
+    os.close(out_fd)
+    try:
+        proc = subprocess.run(
+            [python_exe, "-c", _SUBPROCESS_CHILD,
+             str(engine_root), module_name, out_path, json.dumps(probe_args)],
+            capture_output=True, timeout=timeout_sec, text=True)
+        data = Path(out_path).read_text(encoding="utf-8").strip()
+        if data:
+            return json.loads(data)
+        reason = (proc.stderr or "no output").strip()[-300:]
+        logger.warning("subprocess probe %s produced no result: %s",
+                       module_name, reason)
+        return {"_probe_status": "skipped", "reason": reason}
+    except subprocess.TimeoutExpired:
+        logger.warning("subprocess probe %s timed out after %ss",
+                       module_name, timeout_sec)
+        return {"_probe_status": "skipped",
+                "reason": f"timeout after {timeout_sec}s"}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("subprocess probe %s failed: %s", module_name, e)
+        return {"_probe_status": "skipped", "reason": str(e)[:300]}
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+
+
+def _run_crawlability(engine_root: Path, url: str) -> dict:
+    """Run crawlability_scan in an isolated subprocess (default python3).
+
+    Playwright-sync cannot run in a pool worker thread; running it in its own
+    process also shields the report from any Node-side crash. Uses the same
+    interpreter that runs the report (sys.executable) — Playwright lives there.
+    """
+    return _run_probe_subprocess(
+        engine_root, "crawlability_scan", [url],
+        python_exe=sys.executable, timeout_sec=CRAWLABILITY_TIMEOUT_SEC)
+
+
+def _run_browser_ai(engine_root: Path, url: str, brand: str | None,
+                    queries: list[str]) -> dict:
+    """Run browser_ai_capture (Camoufox Perplexity) via the superscrape venv
+    python, because camoufox is NOT installed in the default python3.
+
+    Graceful-skips on any failure (missing venv, timeout, crash) so the report
+    never breaks. Keyed "perplexity_browser" by the caller.
+    """
+    if not Path(SUPERSCRAPE_PY).exists():
+        logger.warning("browser_ai_capture skipped: venv python not found at %s",
+                       SUPERSCRAPE_PY)
+        return {"_probe_status": "skipped",
+                "reason": f"superscrape venv python not found: {SUPERSCRAPE_PY}"}
+    return _run_probe_subprocess(
+        engine_root, "browser_ai_capture", [url, brand or "", queries[:5]],
+        python_exe=SUPERSCRAPE_PY, timeout_sec=BROWSER_AI_TIMEOUT_SEC)
+
+
+def _browser_ai_queries(offsite: dict[str, dict], url: str,
+                        brand: str | None, industry_hint: str | None,
+                        product_hint: str | None) -> list[str]:
+    """Pick brand-relevant buyer prompts for the Perplexity browser capture.
+
+    Prefer the prompt_discovery buyer_prompts (real PAA + templated), else fall
+    back to the same buyer queries the ai_citation probe uses.
+    """
+    prompts = offsite.get("prompts", {}) or {}
+    bp = prompts.get("buyer_prompts", []) or []
+    picked = [p.get("prompt") for p in bp if p.get("prompt")][:5]
+    if picked:
+        return picked
+    return build_buyer_queries(industry_hint, product_hint, brand)
 
 
 def run_offsite_probes(url: str, brand: str | None = None,
@@ -298,4 +443,20 @@ def run_offsite_probes(url: str, brand: str | None = None,
             results[key] = output
             status = output.get("_probe_status", "ok")
             logger.info("  [%s] %s", key, status)
+
+    # --- crawlability: Playwright-sync, MUST run outside the pool (subprocess).
+    logger.info("running crawlability_scan (Playwright, isolated subprocess)")
+    results["crawlability"] = _run_crawlability(engine_root, url)
+    logger.info("  [crawlability] %s",
+                results["crawlability"].get("_probe_status",
+                                            results["crawlability"].get("render_engine", "ok")))
+
+    # --- perplexity_browser: Camoufox capture via the superscrape venv python.
+    # Uses brand-relevant buyer prompts pulled from the prompts probe result.
+    queries = _browser_ai_queries(results, url, brand, industry_hint, product_hint)
+    logger.info("running browser_ai_capture (Perplexity, venv subprocess): %s", queries)
+    results["perplexity_browser"] = _run_browser_ai(engine_root, url, brand, queries)
+    logger.info("  [perplexity_browser] %s",
+                results["perplexity_browser"].get("_probe_status",
+                                                  results["perplexity_browser"].get("engine", "ok")))
     return results

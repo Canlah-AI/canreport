@@ -99,7 +99,8 @@ _STALE_GARBAGE_DOMAINS = {
 # Off-site module builders (brand-agnostic)
 # ---------------------------------------------------------------------------
 
-def _module_ai_citation(ai: dict, brand_name: str = "") -> dict:
+def _module_ai_citation(ai: dict, brand_name: str = "",
+                        perplexity_browser: dict | None = None) -> dict:
     """AI Citation Visibility — the GEO money shot.
 
     Surfaces the richer live_ai_search summary_stats: multi-run averaged
@@ -179,6 +180,34 @@ def _module_ai_citation(ai: dict, brand_name: str = "") -> dict:
             rate_cell,
             str(best) if best is not None else "未出现",
         ])
+    # Perplexity (browser-captured, REAL) — an extra engine row from the
+    # browser_ai_capture probe. Captured via a real headless browser (Camoufox),
+    # NOT an API, so it complements the API/SERP engines above. Skips gracefully
+    # when the probe was skipped/errored or returned no usable data.
+    pb_cited = False
+    pb = perplexity_browser or {}
+    pb_status = pb.get("_probe_status")
+    pb_stats = pb.get("summary_stats", {}) or {}
+    pb_results = pb.get("results", []) or []
+    if pb_status not in ("skipped", "error") and (pb_results or pb_stats.get("queries_total")):
+        pb_rate = pb_stats.get("citation_rate")
+        pb_qtotal = pb_stats.get("queries_total", len(pb_results))
+        pb_qcited = pb_stats.get("queries_cited", 0)
+        pb_cited = (pb_qcited or 0) > 0
+        # best position across cited queries (lower is better)
+        pb_positions = [r.get("position") for r in pb_results
+                        if r.get("cited") and r.get("position") is not None]
+        pb_best = min(pb_positions) if pb_positions else None
+        rate_cell = ("—" if pb_rate is None
+                     else f"{_rate_status(pb_rate)} {round(pb_rate * 100)}%")
+        table_a_rows.append([
+            "Perplexity（浏览器实测）",
+            "✅ 已测试 tested（真实浏览器捕获，非 API）",
+            str(pb_qtotal),
+            rate_cell,
+            str(pb_best) if pb_best is not None else "未出现",
+        ])
+
     # Backlog engines — honest "not yet wired" note in the same table
     if backlog:
         table_a_rows.append([
@@ -965,6 +994,296 @@ def _module_social_nap(social: dict, nap: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Technical SEO crawl (crawlability_scan) — JS-rendered crawl
+# ---------------------------------------------------------------------------
+
+_AI_CRAWLER_FRIENDLY = {
+    "GPTBot": "GPTBot (ChatGPT)", "ClaudeBot": "ClaudeBot (Claude)",
+    "PerplexityBot": "PerplexityBot (Perplexity)",
+    "Google-Extended": "Google-Extended (Gemini/AI Overview)",
+}
+_CRAWL_SEV_MAP = {"P0": "P0", "P1": "P1", "P2": "P2", "P3": "P2"}
+
+
+def _module_crawlability(crawl: dict) -> dict:
+    """Technical SEO Health — JS-rendered technical crawl.
+
+    Surfaces render engine, pages crawled, AI-crawler access rules (a GEO
+    signal — blocking GPTBot/ClaudeBot/PerplexityBot/Google-Extended hides you
+    from AI answer engines), canonical/title/meta/H1 hygiene, orphan pages,
+    click depth, redirects, broken links, and HTTPS. Re-surfaces the probe's
+    own findings[] (graceful when the probe skipped/errored).
+    """
+    status = crawl.get("_probe_status")
+    if status in ("skipped", "error") or not crawl:
+        reason = crawl.get("reason") or crawl.get("_reason", "未执行")
+        return {
+            "icon": "🕷️", "title_zh": "技术 SEO 健康度 (爬虫渲染)",
+            "title_en": "Technical SEO Health",
+            "score": -1,
+            "summary_html": (f"<p>技术爬虫探针未能完成（{_trunc(reason, 80)}）。"
+                             f"该模块需要 Playwright 渲染，已优雅跳过，不影响其余报告。</p>"),
+            "data_table": {"headers": ["项目", "状态", "说明"],
+                           "rows": [["爬虫渲染", "⚠️ 已跳过", _trunc(reason, 60)]]},
+            "findings": [],
+        }
+
+    render_engine = crawl.get("render_engine", "unknown")
+    pages = crawl.get("pages_crawled", 0)
+    grade = crawl.get("crawl_grade", "UNKNOWN")
+    robots = crawl.get("robots", {}) or {}
+    ai_crawlers = robots.get("ai_crawlers", {}) or {}
+    sitemap = crawl.get("sitemap", {}) or {}
+    canonical = crawl.get("canonical", {}) or {}
+    titles = crawl.get("titles", {}) or {}
+    meta = crawl.get("meta_desc", {}) or {}
+    headings = crawl.get("headings", {}) or {}
+    hreflang = crawl.get("hreflang", {}) or {}
+    ilinks = crawl.get("internal_links", {}) or {}
+    redirects = crawl.get("redirects", {}) or {}
+    broken = crawl.get("broken_links", {}) or {}
+    https = crawl.get("https", {}) or {}
+    indexability = crawl.get("indexability", {}) or {}
+    probe_findings = crawl.get("findings", []) or []
+
+    rows: list[list] = [["── 渲染与抓取 ──", "", ""]]
+    rows.append(["渲染引擎", "🎭 Playwright (JS 渲染)" if render_engine == "playwright"
+                 else f"{render_engine}", "✅" if render_engine == "playwright" else "⚠️ 降级"])
+    rows.append(["已抓取页面数", str(pages), "—"])
+    rows.append(["抓取健康度评级", grade, "—"])
+    rows.append(["Sitemap", "✅ 已检测" if sitemap.get("present") else "❌ 缺失",
+                 f"{sitemap.get('url_count', 0)} URL"])
+
+    # AI-crawler access — the GEO signal
+    rows.append(["── AI 爬虫访问规则 (GEO 信号) ──", "", ""])
+    for bot in ("GPTBot", "ClaudeBot", "PerplexityBot", "Google-Extended"):
+        rule = ai_crawlers.get(bot, "NO_RULE")
+        if rule == "BLOCKED":
+            cell, st = "🔴 BLOCKED 已屏蔽", "❌ 被 AI 引擎排除"
+        elif rule == "ALLOWED":
+            cell, st = "🟢 ALLOWED 已允许", "✅"
+        else:
+            cell, st = "🟡 NO_RULE 无规则", "默认允许"
+        rows.append([f"  └ {_AI_CRAWLER_FRIENDLY.get(bot, bot)}", cell, st])
+
+    # On-page hygiene
+    rows.append(["── 页面级健康度 ──", "", ""])
+    rows.append(["缺失 Canonical 页面", str(canonical.get("missing_count", 0)),
+                 "⚠️" if canonical.get("missing_count", 0) else "✅"])
+    rows.append(["Canonical 冲突", str(len(canonical.get("conflicts", []) or [])),
+                 "⚠️" if canonical.get("conflicts") else "✅"])
+    rows.append(["缺失 Title 页面", str(titles.get("missing_count", 0)),
+                 "⚠️" if titles.get("missing_count", 0) else "✅"])
+    rows.append(["重复 Title 组", str(len(titles.get("duplicate_groups", []) or [])),
+                 "⚠️" if titles.get("duplicate_groups") else "✅"])
+    rows.append(["缺失 Meta Description", str(meta.get("missing_count", 0)),
+                 "⚠️" if meta.get("missing_count", 0) else "✅"])
+    rows.append(["缺失 H1 页面", str(headings.get("missing_h1_count",
+                 headings.get("missing_h1", 0))),
+                 "⚠️" if headings.get("missing_h1_count", headings.get("missing_h1", 0)) else "✅"])
+    rows.append(["孤立页面 (无内链)", str(ilinks.get("orphan_count", 0)),
+                 "⚠️" if ilinks.get("orphan_count", 0) else "✅"])
+    rows.append(["最大点击深度", str(ilinks.get("max_click_depth", "—")), "—"])
+    hl_count = hreflang.get("pages_with_hreflang", hreflang.get("count", 0))
+    rows.append(["hreflang 标记页面", str(hl_count), "—"])
+    rows.append(["重定向链 / 循环",
+                 f"{len(redirects.get('chains', []) or [])} 链 · {len(redirects.get('loops', []) or [])} 循环",
+                 "⚠️" if redirects.get("loops") else "—"])
+    rows.append(["失效内链", str(broken.get("count", 0)),
+                 "❌" if broken.get("count", 0) else "✅"])
+    rows.append(["全站 HTTPS", "✅ 全部安全" if https.get("all_secure", True) else "❌ 有非 HTTPS",
+                 "混合内容" if https.get("mixed_content_pages") else "—"])
+    if indexability:
+        rows.append(["可索引页面",
+                     f"{indexability.get('indexable_count', '—')} / {pages}", "—"])
+
+    # Findings: re-surface the probe's own findings[] (already severity-tagged).
+    findings: list[dict] = []
+    blocked_ai = [b for b, v in ai_crawlers.items() if v == "BLOCKED"]
+    for i, pf in enumerate(probe_findings):
+        sev = _CRAWL_SEV_MAP.get(str(pf.get("severity", "P2")).upper(), "P2")
+        findings.append(_finding(
+            sev, pf.get("title", "技术 SEO 问题"),
+            pf.get("impact", ""), pf.get("action", ""),
+            f"CRAWL-{i:03d}", "crawlability",
+            evidence=_trunc(pf.get("impact", ""), 120), confidence=0.85))
+
+    ai_clause = (f"⚠️ {len(blocked_ai)} 个 AI 爬虫被屏蔽（{', '.join(blocked_ai)}）"
+                 if blocked_ai else "AI 爬虫均未被显式屏蔽")
+    band = {"GOOD": 85, "FAIR": 60, "POOR": 35, "CRITICAL": 15}.get(grade, 50)
+
+    return {
+        "icon": "🕷️", "title_zh": "技术 SEO 健康度 (爬虫渲染)",
+        "title_en": "Technical SEO Health",
+        "score": band,
+        "summary_html": (
+            f"<p><strong>渲染引擎 {render_engine} · 抓取 {pages} 页 · 评级 {grade}</strong></p>"
+            f"<p>{ai_clause}。失效内链 {broken.get('count', 0)} 个，孤立页面 "
+            f"{ilinks.get('orphan_count', 0)} 个，最大点击深度 {ilinks.get('max_click_depth', '—')}。</p>"),
+        "data_table": {"headers": ["指标", "数值/状态", "评估"], "rows": rows},
+        "findings": findings,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Query universe & long-tail (prompt_discovery)
+# ---------------------------------------------------------------------------
+
+def _module_keyword_universe(prompts: dict) -> dict:
+    """Query Universe & Long-Tail — what buyers actually ask + the AI prompts we test.
+
+    Surfaces intent_breakdown, a sample of discovered long-tail keywords, and the
+    buyer_prompts (by intent) we feed to the AI-citation tests. The core finding:
+    the gap between what buyers ask AI and where the brand shows up.
+    """
+    status = prompts.get("_probe_status")
+    if status in ("skipped", "error") or not prompts:
+        reason = prompts.get("reason") or prompts.get("_reason", "未执行")
+        return {
+            "icon": "🔑", "title_zh": "查询宇宙与长尾词",
+            "title_en": "Query Universe & Long-Tail", "score": -1,
+            "summary_html": f"<p>查询发现探针未完成（{_trunc(reason, 80)}），已跳过。</p>",
+            "data_table": {"headers": ["项目", "状态", "说明"],
+                           "rows": [["查询发现", "⚠️ 已跳过", _trunc(reason, 60)]]},
+            "findings": [],
+        }
+
+    ltk = prompts.get("long_tail_keywords", []) or []
+    questions = prompts.get("questions", []) or []
+    buyer_prompts = prompts.get("buyer_prompts", []) or []
+    intent = prompts.get("intent_breakdown", {}) or {}
+    grade = prompts.get("grade", "UNKNOWN")
+
+    rows: list[list] = [["── 买家意图分布 (AI 测试提示词) ──", "", ""]]
+    rows.append(["意图类型", "提示词数量", "占比"])
+    total_bp = sum(intent.values()) or 1
+    for cat, n in intent.items():
+        rows.append([_CATEGORY_FRIENDLY.get(cat, cat), str(n), f"{round(n / total_bp * 100)}%"])
+
+    rows.append(["── 发现的长尾关键词样本 ──", "", ""])
+    for kw in ltk[:12]:
+        if isinstance(kw, dict):
+            rows.append([_trunc(kw.get("keyword", ""), 45),
+                         _CATEGORY_FRIENDLY.get(kw.get("intent", ""), kw.get("intent", "—")),
+                         _trunc(kw.get("source", ""), 18)])
+        else:
+            rows.append([_trunc(str(kw), 45), "—", "—"])
+    if len(ltk) > 12:
+        rows.append([f"+{len(ltk) - 12} 更多长尾词", "", ""])
+
+    rows.append(["── 实测 AI 买家提示词（按意图）──", "", ""])
+    for bp in buyer_prompts:
+        rows.append([_trunc(bp.get("prompt", ""), 50),
+                     _CATEGORY_FRIENDLY.get(bp.get("intent", ""), bp.get("intent", "—")), "🤖 用于 AI 测试"])
+
+    findings: list[dict] = []
+    if buyer_prompts:
+        sample = "、".join(f"「{bp.get('prompt','')}」" for bp in buyer_prompts[:3])
+        findings.append(_finding(
+            "P1", "买家向 AI 提问的查询宇宙已映射",
+            (f"发现 {len(ltk)} 个长尾关键词、{len(buyer_prompts)} 条买家意图提示词"
+             f"（discovery {intent.get('discovery',0)} / comparison {intent.get('comparison',0)} / "
+             f"recommendation {intent.get('recommendation',0)} / factual {intent.get('factual',0)}）。"
+             f"这些正是 AI 引擎在回答买家时检索的真实问题，例如：{sample}。"
+             f"品牌是否在这些查询上被 AI 引用，决定了 AI 时代的发现量 — 与 AI 引用模块直接对照可见差距。"),
+            ("把这些高意图提示词作为 GEO 内容选题：每条 comparison/recommendation 提示词产出 1 篇"
+             "可被 AI 抓取的对比/指南页，配 Product/FAQ Schema，优先攻竞品垄断的查询。"),
+            "PROMPTS-001", "prompts",
+            evidence=f"长尾 {len(ltk)} 个、提示词 {len(buyer_prompts)} 条、问题型 {len(questions)} 个；grade {grade}。",
+            confidence=0.85))
+    else:
+        findings.append(_finding(
+            "P2", "查询发现结果偏薄",
+            f"仅发现 {len(ltk)} 个长尾词，未能生成足量买家提示词（grade {grade}）。",
+            "确认 SERPER_API_KEY 已配置，并补充行业种子词以扩大查询宇宙。",
+            "PROMPTS-002", "prompts",
+            evidence=f"long_tail {len(ltk)}、buyer_prompts {len(buyer_prompts)}。", confidence=0.7))
+
+    band = {"RICH": 80, "MODERATE": 60, "THIN": 35}.get(grade, 50)
+    return {
+        "icon": "🔑", "title_zh": "查询宇宙与长尾词",
+        "title_en": "Query Universe & Long-Tail", "score": band,
+        "summary_html": (
+            f"<p><strong>{len(ltk)} 个长尾词 · {len(buyer_prompts)} 条 AI 买家提示词 · grade {grade}</strong></p>"
+            f"<p>意图分布：discovery {intent.get('discovery',0)} · comparison {intent.get('comparison',0)} · "
+            f"recommendation {intent.get('recommendation',0)} · factual {intent.get('factual',0)}。"
+            f"这些提示词同时驱动 AI 引用实测，把「买家问什么」与「品牌是否被引用」直接对齐。</p>"),
+        "data_table": {"headers": ["查询 / 关键词", "意图 / 数量", "来源 / 用途"], "rows": rows},
+        "findings": findings,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Google Search Console connector (gsc_connector) — CTA when not connected
+# ---------------------------------------------------------------------------
+
+def _module_gsc(gsc: dict) -> dict:
+    """GSC — Connect to Unlock. Renders real data when connected, else a CTA.
+
+    When not connected (the default, no creds today) it surfaces what_it_unlocks
+    + auth_instructions as the path to real impressions/clicks/rankings/query data.
+    """
+    connected = gsc.get("connected", False)
+    if connected:
+        totals = gsc.get("totals", {}) or {}
+        top_q = gsc.get("top_queries", []) or []
+        opps = gsc.get("opportunities", []) or []
+        rows: list[list] = [["── 真实搜索表现 (GSC) ──", "", ""]]
+        rows.append(["总点击 / 曝光",
+                     f"{totals.get('clicks', 0)} / {totals.get('impressions', 0)}", "—"])
+        rows.append(["平均 CTR / 排名",
+                     f"{totals.get('ctr', 0)} / {totals.get('position', 0)}", "—"])
+        rows.append(["── Top 查询 ──", "", ""])
+        for q in top_q[:10]:
+            rows.append([_trunc(q.get("query", ""), 40),
+                         f"点击 {q.get('clicks', 0)} · 曝光 {q.get('impressions', 0)}",
+                         f"#{q.get('position', '—')}"])
+        findings = [_finding(
+            "PASS", "已连接 Google Search Console",
+            f"已拉取真实搜索表现：{totals.get('clicks',0)} 点击 / {totals.get('impressions',0)} 曝光，"
+            f"{len(opps)} 个临门查询机会。",
+            "优先优化临门一脚（page-2）查询，并对高曝光低 CTR 查询重写 title/meta。",
+            "GSC-001", "gsc",
+            evidence=f"totals={totals}", confidence=0.9)]
+        return {
+            "icon": "📊", "title_zh": "Google Search Console",
+            "title_en": "Google Search Console", "score": 80,
+            "summary_html": (f"<p>已连接 GSC：{totals.get('clicks',0)} 点击 / "
+                             f"{totals.get('impressions',0)} 曝光，{len(opps)} 个机会查询。</p>"),
+            "data_table": {"headers": ["指标", "数值", "排名/状态"], "rows": rows},
+            "findings": findings,
+        }
+
+    # Not connected → CTA
+    unlocks = gsc.get("what_it_unlocks", []) or []
+    instructions = gsc.get("auth_instructions", "")
+    rows = [["── 连接 GSC 可解锁的真实数据 ──", "", ""]]
+    for i, item in enumerate(unlocks, 1):
+        rows.append([f"  {i}.", _trunc(item, 60), "🔓 待解锁"])
+
+    findings = [_finding(
+        "P1", "连接 GSC 解锁真实曝光/点击/排名/query 数据",
+        ("当前报告基于公开抓取与第三方探针估算；连接 Google Search Console（只读 OAuth 授权）后，"
+         "本模块将呈现来自 Google 的真实点击、曝光、每个查询的平均排名与 CTR、Top 落地页，"
+         "以及 page-2 临门一脚关键词 — 这是任何外部探针都无法估算的一手数据。"),
+        _trunc(instructions, 160) or "通过 Google OAuth 授权只读访问 Search Console，随后本审计自动拉取真实搜索表现数据。",
+        "GSC-CTA-001", "gsc",
+        evidence=f"状态: {gsc.get('status', 'awaiting_authorization')}；可解锁 {len(unlocks)} 类数据。",
+        confidence=0.9)]
+    findings[0]["needs_account"] = True
+
+    return {
+        "icon": "📊", "title_zh": "Google Search Console (待连接)",
+        "title_en": "GSC — Connect to Unlock", "score": -1,
+        "summary_html": (
+            f"<p><strong>🔓 待授权连接</strong> — 连接后解锁 {len(unlocks)} 类 Google 一手搜索数据。</p>"
+            f"<p>{_trunc(instructions, 140)}</p>"),
+        "data_table": {"headers": ["#", "可解锁数据", "状态"], "rows": rows},
+        "findings": findings,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Synthesis layer — 90-day GEO roadmap
 # ---------------------------------------------------------------------------
 
@@ -1073,14 +1392,20 @@ def build_contract(base: dict, offsite: dict[str, dict]) -> dict:
     """Merge base on-site audit + off-site probes into one report contract."""
     offsite_modules = [
         _module_ai_citation(
-            offsite.get("ai_citation", {}), brand_name=base.get("company", "")),
+            offsite.get("ai_citation", {}), brand_name=base.get("company", ""),
+            perplexity_browser=offsite.get("perplexity_browser", {})),
         _module_reputation(offsite.get("reputation", {})),
         _module_backlinks_news(offsite.get("backlink", {}), offsite.get("news", {})),
         _module_community_presence(offsite.get("community", {})),
+        # Technical/on-site SEO crawl + query universe sit near the schema/tech
+        # modules; GSC connector follows (CTA when not connected).
+        _module_crawlability(offsite.get("crawlability", {})),
+        _module_keyword_universe(offsite.get("prompts", {})),
         _module_schema_ai(
             offsite.get("schema", {}), offsite.get("freshness", {})),
         _module_social_nap(
             offsite.get("social", {}), offsite.get("nap", {})),
+        _module_gsc(offsite.get("gsc", {})),
     ]
 
     data = dict(base)  # shallow copy of the base report_data
