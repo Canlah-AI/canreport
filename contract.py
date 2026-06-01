@@ -16,7 +16,11 @@ hardcoded. Remediation code snippets are generic templates the reader adapts.
 """
 from __future__ import annotations
 
+import html
+import json
 from typing import Any
+
+from reconcile import reconcile_modules
 
 _FINDING_DEFAULTS = {
     "confidence": 0.85,
@@ -94,6 +98,169 @@ _STALE_GARBAGE_DOMAINS = {
     "hardwarezone.com.sg", "circles.life", "sma.org.sg", "singtel.com",
     "starhub.com", "moneysmart.sg",
 }
+
+# Engines whose results carry a real generative AI answer (verbatim excerpt).
+_EVIDENCE_GENERATIVE_ENGINES = {"gemini_search", "openai_chatgpt"}
+
+# Phrases that betray a dead / blocked browser capture (UI chrome, not an answer).
+_DEAD_CAPTURE_MARKERS = ("sign up and repeat", "sign up", "log in to continue",
+                         "enable javascript", "verify you are human")
+
+
+def _parse_excerpt(raw_excerpt: Any) -> str:
+    """gemini raw_excerpt is a JSON string; pull answer_preview. Else use as-is.
+
+    Falls back to the raw string when JSON parsing fails so we never silently
+    drop a real (plain-text) excerpt from another engine.
+    """
+    if not raw_excerpt:
+        return ""
+    if isinstance(raw_excerpt, dict):
+        return str(raw_excerpt.get("answer_preview")
+                   or raw_excerpt.get("answer_text") or "").strip()
+    if isinstance(raw_excerpt, str):
+        s = raw_excerpt.strip()
+        try:
+            obj = json.loads(s)
+        except (json.JSONDecodeError, ValueError):
+            return s
+        if isinstance(obj, dict):
+            return str(obj.get("answer_preview")
+                       or obj.get("answer_text") or "").strip() or s
+        return s
+    return str(raw_excerpt).strip()
+
+
+def _shorten_url(url: Any, n: int = 72) -> str:
+    """Opaque Vertex grounding redirects are 200+ char junk — show a stub."""
+    u = "" if url is None else str(url).strip()
+    if not u:
+        return ""
+    if "grounding-api-redirect" in u or "vertexaisearch" in u:
+        tail = u.rstrip("/").split("/")[-1]
+        return f"vertexaisearch…/{tail[:10]}…（Google grounding 重定向）"
+    return _trunc(u, n)
+
+
+def _is_dead_capture(excerpt: str) -> bool:
+    low = (excerpt or "").lower()
+    return len(low) < 200 or any(m in low for m in _DEAD_CAPTURE_MARKERS)
+
+
+def _build_evidence_pack(ai: dict, perplexity_browser: dict,
+                         cap: int = 10) -> dict | None:
+    """Evidence Pack — per-query verbatim AI answers as the SoV receipt.
+
+    Brand-agnostic. One block per tested query that carried a real AI answer:
+    the verbatim prompt, engine + run + date, brand-cited y/n, the AI answer
+    excerpt (quoted), and the cited source URLs. Rendered entirely inside
+    `body_html` (template-loop renders it `| safe`) so it survives both
+    templates with zero loop changes. Returns None when there is nothing to show.
+    """
+    brand = ai.get("brand_name") or "本品牌"
+    results = ai.get("results", []) or []
+    stats = ai.get("summary_stats", {}) or {}
+    runs_n = stats.get("runs_per_generative_engine", 1) or 1
+
+    blocks: list[str] = []
+
+    # 1) Generative-engine answers (gemini / chatgpt) with real verbatim text.
+    for r in results:
+        if len(blocks) >= cap:
+            break
+        if not isinstance(r, dict):
+            continue
+        engine = r.get("engine", "")
+        if engine not in _EVIDENCE_GENERATIVE_ENGINES:
+            continue
+        excerpt = _parse_excerpt(r.get("raw_excerpt"))
+        if not excerpt:
+            continue
+        cited = bool(r.get("target_cited"))
+        comps = [c for c in (r.get("competitors_cited") or []) if c]
+        urls = [u for u in (r.get("cited_urls") or []) if u]
+        blocks.append(_evidence_block_html(
+            engine=_ENGINE_FRIENDLY.get(engine, engine),
+            query=r.get("query", ""),
+            runs_n=runs_n if engine in _EVIDENCE_GENERATIVE_ENGINES else 1,
+            run_index=r.get("run_index"),
+            brand=brand, cited=cited, excerpt=excerpt,
+            comps=comps, urls=urls, low_signal=False))
+
+    # 2) Perplexity browser captures — render but honestly flag dead captures.
+    pb = perplexity_browser or {}
+    for r in (pb.get("results", []) or []):
+        if len(blocks) >= cap:
+            break
+        if not isinstance(r, dict):
+            continue
+        excerpt = str(r.get("answer_preview") or "").strip()
+        if not excerpt:
+            continue
+        cited = bool(r.get("cited"))
+        comps = [c for c in (r.get("competitors") or r.get("competitors_cited") or []) if c]
+        urls = [s.get("url") for s in (r.get("sources") or [])
+                if isinstance(s, dict) and s.get("url")]
+        blocks.append(_evidence_block_html(
+            engine=_ENGINE_FRIENDLY.get("perplexity_browser", "Perplexity（浏览器实测）"),
+            query=r.get("query", ""), runs_n=1, run_index=None,
+            brand=brand, cited=cited, excerpt=excerpt,
+            comps=comps, urls=urls, low_signal=_is_dead_capture(excerpt)))
+
+    if not blocks:
+        return None
+
+    intro = (
+        f"<p>这是 AI 引用力诊断的<strong>原始证据</strong>：下列每一块都是某一条真实买家查询"
+        f"在 AI 引擎里的<strong>逐字回答原话</strong>（verbatim）与其引用的来源链接。"
+        f"生成式引擎每条查询跑 {runs_n} 次取平均，此处展示其中代表性的一次捕获。</p>"
+        f"<p>当回答里<strong>没有出现 {html.escape(str(brand))}</strong>、却列出竞品域名时，"
+        f"即为「声量被竞品夺走」的直接物证 —— 怀疑论者也无可辩驳。</p>")
+    return {
+        "title": "证据包：AI 回答原话与来源链接",
+        "subtitle": "Evidence Pack — 每条买家查询的 AI 逐字回答 + 被引用来源",
+        "body_html": intro + "".join(blocks),
+        "note": ("opaque 的 vertexaisearch grounding 链接是真实但不可点击的重定向，"
+                 "已折叠展示；竞品域名为可读的「谁被推荐了」证据。"
+                 "标注「低信号」的捕获为被登录墙/UI 噪声污染，仅作透明披露不作证据。"),
+    }
+
+
+def _evidence_block_html(engine: str, query: str, runs_n: int,
+                         run_index: Any, brand: str, cited: bool,
+                         excerpt: str, comps: list, urls: list,
+                         low_signal: bool) -> str:
+    """Render ONE evidence block as self-contained HTML (template-safe)."""
+    q = html.escape(_trunc(query, 120))
+    cited_badge = ("✅ 已引用本品牌" if cited
+                   else f"🔴 未引用 {html.escape(str(brand))}")
+    runs_clause = f" · {runs_n} 次跑取平均" if runs_n and runs_n > 1 else ""
+    run_clause = (f" · 第 {run_index + 1} 次捕获"
+                  if isinstance(run_index, int) else "")
+    low_badge = ("　<span style='color:#b45309'>⚠️ 低信号捕获（疑被登录墙/UI 噪声污染）</span>"
+                 if low_signal else "")
+    quoted = html.escape(_trunc(excerpt, 700)).replace("\n", "<br>")
+    comp_html = ""
+    if comps:
+        comp_html = ("<div style='font-size:9pt;margin-top:6px;'><strong>同一回答里被推荐的竞品：</strong> "
+                     + "、".join(html.escape(_trunc(str(c), 40)) for c in comps[:8])
+                     + "</div>")
+    url_html = ""
+    if urls:
+        items = "".join(
+            f"<li style='font-size:8.5pt;word-break:break-all;'>{html.escape(_shorten_url(u))}</li>"
+            for u in urls[:8])
+        url_html = ("<div style='font-size:9pt;margin-top:6px;'><strong>该回答引用的来源链接："
+                    "</strong></div><ul style='margin:2px 0 0 1.2em;'>" + items + "</ul>")
+    return (
+        "<div style='border:1px solid var(--border,#d4d4d8);border-radius:6px;"
+        "padding:10px 12px;margin:10px 0;'>"
+        f"<div style='font-size:9pt;color:var(--text-secondary,#52525b);'>"
+        f"<strong>{html.escape(engine)}</strong>{runs_clause}{run_clause}　·　{cited_badge}{low_badge}</div>"
+        f"<div style='font-size:10pt;font-weight:600;margin:4px 0 6px;'>查询 Query：{q}</div>"
+        f"<blockquote style='margin:0;padding:8px 12px;border-left:3px solid var(--accent,#2563eb);"
+        f"background:rgba(37,99,235,0.05);font-size:9.5pt;line-height:1.5;'>&ldquo;{quoted}&rdquo;</blockquote>"
+        f"{comp_html}{url_html}</div>")
 
 
 # ---------------------------------------------------------------------------
@@ -1474,6 +1641,15 @@ def build_contract(base: dict, offsite: dict[str, dict]) -> dict:
     data = dict(base)  # shallow copy of the base report_data
     all_modules = list(base.get("modules", [])) + offsite_modules
 
+    # Self-verification / cross-check pass: audit high-risk NEGATIVE findings
+    # (absence claims) against INDEPENDENT probe signals. Runs AFTER all modules
+    # are built but BEFORE roadmap synthesis, score recalculation, and
+    # top-actions — so a flipped/downgraded finding stops cascading into the
+    # headline score, the 90-day plan, and the P0/P1 counts. Suppresses false
+    # "no blog" claims when the off-site sitemap crawl found real blog URLs, and
+    # softens unverifiable "未检测到 X" wording to honest "未通过X检测到".
+    all_modules = reconcile_modules(all_modules, offsite)
+
     # Synthesis layer (LAST module): reads the already-built diagnostics to
     # sequence a 90-day plan, so it must be appended AFTER everything else.
     roadmap = _module_roadmap(all_modules, offsite)
@@ -1692,7 +1868,7 @@ def _build_geo_appendix(offsite: dict[str, dict],
         for it in long_tail[:10]:
             rows.append(["长尾 Long-tail", _trunc(_q(it), 70), _cat(it)])
         appendix.append({
-            "title": "附件 A — 买家意图与长尾查询清单",
+            "title": "买家意图与长尾查询清单",
             "subtitle": "AI 与搜索引擎里客户真实会问的问题，按意图分类",
             "body_html": (
                 "<p>下列查询来自对本品类买家旅程的探测，是 GEO 内容选题的<strong>事实依据</strong>"
@@ -1720,7 +1896,7 @@ def _build_geo_appendix(offsite: dict[str, dict],
             "下表是实测中向 AI 提出的查询；竞品在这些查询上赢得引用，"
             "应作为 citation-bait 内容的<strong>直接打击目标</strong>。</p>")
         item = {
-            "title": "附件 B — AI 引用战场：实测查询与被引竞品",
+            "title": "AI 引用战场：实测查询与被引竞品",
             "subtitle": "竞品在 AI 回答里垄断的查询 —— 你的内容要逐条夺回",
             "body_html": body,
             "table_headers": ["#", "实测 AI 查询 Query Run"],
@@ -1735,6 +1911,17 @@ def _build_geo_appendix(offsite: dict[str, dict],
             item["body_html"] = body + comp_html
         item["note"] = "为每条查询产出 1 篇对标竞品的对比/指南长文 + 结构化数据。"
         appendix.append(item)
+
+    # --- B2. Evidence Pack — verbatim AI answers as the SoV receipt ---
+    # Sits immediately after block B (the SoV accusation) as its proof: per-query
+    # verbatim AI answer text + the source URLs the engines actually cited.
+    ev_item = _build_evidence_pack(
+        ai=offsite.get("ai_citation", {}) or {},
+        perplexity_browser=offsite.get("perplexity_browser", {}) or {},
+        cap=10,
+    )
+    if ev_item:
+        appendix.append(ev_item)
 
     # --- C. Missing schema types (citation-bait structured data templates) ---
     schema = offsite.get("schema", {}) or {}
@@ -1755,7 +1942,7 @@ def _build_geo_appendix(offsite: dict[str, dict],
         ])
     if sch_rows:
         appendix.append({
-            "title": "附件 C — 待补充的结构化数据 (Schema) 模板",
+            "title": "待补充的结构化数据 (Schema) 模板",
             "subtitle": "让 AI 与富媒体结果能读懂你的实体与产品",
             "body_html": (
                 "<p>下列 Schema 类型缺少必填或推荐字段。补齐后可提升被 AI 引用、"
@@ -1771,7 +1958,7 @@ def _build_geo_appendix(offsite: dict[str, dict],
     if roadmap and roadmap.get("data_table", {}).get("rows"):
         dt = roadmap["data_table"]
         appendix.append({
-            "title": "附件 D — 90 天 GEO 执行路线图",
+            "title": "90 天 GEO 执行路线图",
             "subtitle": "把全部诊断综合为按月排序的可执行计划（顺序而非并行）",
             "body_html": (
                 "<p>本路线图是上述所有诊断的<strong>综合产物</strong>："

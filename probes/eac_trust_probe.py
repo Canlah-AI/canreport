@@ -24,6 +24,16 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+try:
+    # Normal package import (engine loads this module by file path with the
+    # probes/ dir on sys.path, so the sibling import resolves).
+    from probes.sitemap_discovery import discover_urls
+except ImportError:  # pragma: no cover - fallback for path-only loads
+    try:
+        from sitemap_discovery import discover_urls  # type: ignore
+    except ImportError:
+        discover_urls = None  # type: ignore
+
 UA = "EAC-Audit/1.0 (Canlah AI; Google EAC Partner)"
 TIMEOUT = 10.0
 
@@ -227,6 +237,77 @@ def _check_content_paths(base_url: str) -> list[dict[str, Any]]:
     path_order = {p: i for i, p in enumerate(CONTENT_PATHS)}
     results.sort(key=lambda r: path_order.get(r["path"], 999))
     return results
+
+
+def _detect_blog(base_url: str) -> dict[str, Any]:
+    """Sitemap-first blog detection.
+
+    The sitemap (robots.txt Sitemap: directives + /sitemap.xml + child
+    sitemaps) is the single source of truth for what real URLs a site has.
+    Shopify stores blog at /blogs/<handle> (e.g. /blogs/gazebo-tips), which the
+    old hardcoded /blog HEAD-check missed entirely -> false "no blog" verdict.
+
+    Strategy:
+      1. Try sitemap discovery. ANY URL categorized as blog (incl. Shopify
+         /blogs/... and the sitemap_blogs_N.xml child sitemap) => has_blog,
+         with the REAL blog URL as evidence.
+      2. Only fall back to HEAD-checking the hardcoded CONTENT_PATHS when the
+         sitemap is unavailable / yields no blog signal.
+
+    Returns:
+        {
+          "has_blog": bool,
+          "method": "sitemap" | "path_guess",
+          "blog_urls": [real urls],          # from sitemap (possibly empty)
+          "blog_url": str | None,            # first real blog URL for evidence
+          "blog_count": int,                 # sitemap blog URL count
+          "sitemap_found": bool,
+          "content_paths": [path-guess results],  # always run for output parity
+        }
+    """
+    # Always run the legacy path probe so the output keeps `content_paths`
+    # (downstream report/template may render it) and so we have a fallback.
+    content_paths = _check_content_paths(base_url)
+    path_guess_has_blog = any(p["exists"] for p in content_paths)
+
+    blog_urls: list[str] = []
+    sitemap_found = False
+    if discover_urls is not None:
+        try:
+            sm = discover_urls(base_url)
+            sitemap_found = sm.sitemap_found
+            blog_urls = list(sm.blog_urls)
+        except Exception:  # noqa: BLE001 — discovery must never abort the probe
+            blog_urls = []
+            sitemap_found = False
+
+    if blog_urls:
+        return {
+            "has_blog": True,
+            "method": "sitemap",
+            "blog_urls": blog_urls,
+            "blog_url": blog_urls[0],
+            "blog_count": len(blog_urls),
+            "sitemap_found": sitemap_found,
+            "content_paths": content_paths,
+        }
+
+    # No blog evidence from sitemap -> fall back to path guessing.
+    fallback_url: str | None = None
+    if path_guess_has_blog:
+        for p in content_paths:
+            if p["exists"]:
+                fallback_url = base_url.rstrip("/") + p["path"]
+                break
+    return {
+        "has_blog": path_guess_has_blog,
+        "method": "path_guess",
+        "blog_urls": [],
+        "blog_url": fallback_url,
+        "blog_count": 0,
+        "sitemap_found": sitemap_found,
+        "content_paths": content_paths,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +552,7 @@ def _build_findings(
     has_blog: bool,
     is_https: bool,
     product_analysis: dict[str, bool] | None,
+    blog_detection: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Generate structured findings from trust analysis."""
     findings: list[dict[str, Any]] = []
@@ -499,17 +581,31 @@ def _build_findings(
             "paste_location": None,
         })
 
-    # TRUST-001: No blog/content section
+    # TRUST-001: No blog/content section.
+    # Sitemap-first: this finding must NOT fire when the sitemap shows real
+    # blog URLs (e.g. Shopify /blogs/<handle>). has_blog already reflects the
+    # sitemap-first verdict; the evidence text is built to match the method
+    # actually used so we never list the wrong (guessed) paths as "proof".
     if not has_blog:
-        checked_paths = ", ".join(p["path"] for p in content_paths)
+        method = (blog_detection or {}).get("method", "path_guess")
+        if method == "sitemap":
+            # Sitemap was readable but contained no blog/editorial URLs.
+            evidence = (
+                "已解析站点 sitemap（robots.txt Sitemap 指令 + /sitemap.xml + "
+                "子 sitemap），其中未发现任何博客/资讯类 URL"
+                "（如 /blog、/blogs/<handle>、/news、/articles）。"
+            )
+        else:
+            checked_paths = ", ".join(p["path"] for p in content_paths)
+            evidence = (
+                f"未能解析到 sitemap；HEAD 探测路径 {checked_paths} 均返回 404 "
+                "或不可访问。站点中未发现活跃的内容板块。"
+            )
         findings.append({
             "severity": "P1",
             "rule_id": "TRUST-001",
             "title_zh": "未检测到博客/资讯内容板块",
-            "evidence": (
-                f"爬取路径 {checked_paths} 均返回 404 或不可访问。"
-                "站点中未发现活跃的内容板块。"
-            ),
+            "evidence": evidence,
             "confidence": 0.9,
             "impact_zh": (
                 "博客/资讯内容是 Google SEO 的核心信号，也是建立行业权威"
@@ -708,6 +804,11 @@ def probe(
             "error": "Failed to fetch homepage",
             "content_paths_checked": [],
             "has_blog": False,
+            "blog_detection_method": None,
+            "blog_url": None,
+            "blog_urls": [],
+            "blog_url_count": 0,
+            "sitemap_found": False,
             "product_page_analysis": None,
             "is_https": is_https,
             "findings": [],
@@ -719,9 +820,10 @@ def probe(
     if company_name:
         site_context["brand"] = company_name
 
-    # Check content paths in parallel
-    content_paths = _check_content_paths(url)
-    has_blog = any(p["exists"] for p in content_paths)
+    # Sitemap-first blog detection (falls back to path-guessing internally).
+    blog_detection = _detect_blog(url)
+    content_paths = blog_detection["content_paths"]
+    has_blog = blog_detection["has_blog"]
 
     # Check homepage for testimonials (even without a product page)
     home_testimonials = any(p.search(home_html) for p in TESTIMONIAL_PATTERNS)
@@ -747,7 +849,9 @@ def probe(
             "has_comparison": any(p.search(home_html) for p in COMPARISON_PATTERNS),
         }
 
-    findings = _build_findings(content_paths, has_blog, is_https, product_analysis)
+    findings = _build_findings(
+        content_paths, has_blog, is_https, product_analysis, blog_detection,
+    )
     recommendations = _build_recommendations(has_blog, product_analysis, site_context)
 
     return {
@@ -755,6 +859,11 @@ def probe(
         "base_url": url,
         "content_paths_checked": content_paths,
         "has_blog": has_blog,
+        "blog_detection_method": blog_detection["method"],
+        "blog_url": blog_detection["blog_url"],
+        "blog_urls": blog_detection["blog_urls"],
+        "blog_url_count": blog_detection["blog_count"],
+        "sitemap_found": blog_detection["sitemap_found"],
         "product_page_analysis": product_analysis,
         "is_https": is_https,
         "findings": findings,
