@@ -21,10 +21,64 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 logger = logging.getLogger("engine")
+
+# ---------------------------------------------------------------------------
+# Cost + API-call observability
+# ---------------------------------------------------------------------------
+# Paid-equivalent unit costs (USD per external API call). Serper is on the free
+# tier here but we cost it at the paid-equivalent rate so the report reflects the
+# true marginal cost of a run at scale. PSI / autocomplete / HTTP scraping are
+# free and contribute $0.
+SERPER_COST_PER_CALL = float(os.environ.get("SERPER_COST_PER_CALL", "0.001"))
+GEMINI_COST_PER_CALL = float(os.environ.get("GEMINI_COST_PER_CALL", "0.0005"))
+
+
+def estimate_cost(serper_calls: int, gemini_calls: int) -> float:
+    """Estimated paid-equivalent USD cost for a set of external API calls."""
+    return round(serper_calls * SERPER_COST_PER_CALL
+                 + gemini_calls * GEMINI_COST_PER_CALL, 6)
+
+
+def _split_ai_citation_calls(output: dict) -> tuple[int, int]:
+    """Split ai_citation's combined api_calls_made into (serper, gemini).
+
+    live_ai_search counts Serper + Gemini calls together in api_calls_made.
+    We recover the split from the results list: every gemini_search row that
+    came from a live (non-cached) call is one Gemini call. Serper is then the
+    remainder of the total api_calls_made. Conservative + never negative.
+    """
+    total = int(output.get("api_calls_made", 0) or 0)
+    if total <= 0:
+        return 0, 0
+    results = output.get("results", []) or []
+    gemini = sum(1 for r in results
+                 if isinstance(r, dict) and r.get("engine") == "gemini_search")
+    gemini = min(gemini, total)
+    serper = max(0, total - gemini)
+    return serper, gemini
+
+
+def _extract_calls(key: str, output: dict) -> tuple[int, int]:
+    """Return (serper_calls, gemini_calls) for one probe's output.
+
+    Reads whatever the probe reported:
+      - ai_citation: api_calls_made (mixed) → split into serper/gemini
+      - backlink / prompts / news: api_calls_used (Serper-only)
+      - everything else: no reported counts → (0, 0) honestly
+    Probes that make Serper calls but do not expose a count (reviews/community/
+    social/nap) are recorded as 0 rather than guessed — see _run_trace note.
+    """
+    if not isinstance(output, dict):
+        return 0, 0
+    if key == "ai_citation":
+        return _split_ai_citation_calls(output)
+    serper = int(output.get("api_calls_used", 0) or 0)
+    return serper, 0
 
 # Python interpreter that has camoufox installed (browser_ai_capture needs it;
 # the default python3 does NOT). Overridable via env for portability.
@@ -273,14 +327,17 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
              industry_hint: str | None = None,
              product_hint: str | None = None,
              geography: str = "United States",
-             region_code: str = "us") -> tuple[str, dict]:
+             region_code: str = "us") -> tuple[str, dict, float]:
+    """Run one probe; return (key, output, duration_s). Never raises."""
+    t0 = time.monotonic()
     try:
         # ai_citation uses a dedicated runner with brand-relevant queries.
         if key == "ai_citation":
-            return key, run_ai_citation(
+            output = run_ai_citation(
                 engine_root, url, brand,
                 industry_hint=industry_hint, product_hint=product_hint,
                 geography=geography, region_code=region_code)
+            return key, output, time.monotonic() - t0
         mod = _load_probe_module(engine_root, module_name)
         fn = getattr(mod, fn_name)
         # news + backlink probes take industry_keywords (3rd arg) to exclude
@@ -293,10 +350,11 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
             result = fn(url, brand)
         else:
             result = fn(url)
-        return key, (result if isinstance(result, dict) else {"value": result})
+        output = result if isinstance(result, dict) else {"value": result}
+        return key, output, time.monotonic() - t0
     except Exception as e:  # noqa: BLE001 — one probe failing must not abort the run
         logger.warning("off-site probe %s failed: %s", module_name, e)
-        return key, {"_probe_status": "error", "_reason": str(e)[:300]}
+        return key, {"_probe_status": "error", "_reason": str(e)[:300]}, time.monotonic() - t0
 
 
 # ---------------------------------------------------------------------------
@@ -434,12 +492,32 @@ def run_offsite_probes(url: str, brand: str | None = None,
     for the ai_citation probe — without them the citation test would run the
     generic Singapore template that surfaces garbage competitors.
     """
+    run_t0 = time.monotonic()
     engine_root = locate_engine()
     # Put the engine root on sys.path so engine probes that do
     # `from probes import X` for their own siblings resolve correctly.
     if str(engine_root) not in sys.path:
         sys.path.append(str(engine_root))
     logger.info("using engine at %s", engine_root)
+
+    # Per-probe trace rows: {probe, duration_s, serper_calls, gemini_calls, status}
+    per_probe: list[dict] = []
+
+    def _probe_status(output: dict) -> str:
+        st = output.get("_probe_status")
+        if st in ("error", "skipped"):
+            return st
+        return "ok"
+
+    def _record(key: str, output: dict, duration_s: float) -> None:
+        serper, gemini = _extract_calls(key, output)
+        per_probe.append({
+            "probe": key,
+            "duration_s": round(duration_s, 3),
+            "serper_calls": serper,
+            "gemini_calls": gemini,
+            "status": _probe_status(output),
+        })
 
     results: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -449,14 +527,17 @@ def run_offsite_probes(url: str, brand: str | None = None,
             for (key, mod, fn, nb) in OFFSITE_PROBES
         ]
         for fut in as_completed(futures):
-            key, output = fut.result()
+            key, output, duration_s = fut.result()
             results[key] = output
+            _record(key, output, duration_s)
             status = output.get("_probe_status", "ok")
-            logger.info("  [%s] %s", key, status)
+            logger.info("  [%s] %s (%.1fs)", key, status, duration_s)
 
     # --- crawlability: Playwright-sync, MUST run outside the pool (subprocess).
     logger.info("running crawlability_scan (Playwright, isolated subprocess)")
+    c_t0 = time.monotonic()
     results["crawlability"] = _run_crawlability(engine_root, url)
+    _record("crawlability", results["crawlability"], time.monotonic() - c_t0)
     logger.info("  [crawlability] %s",
                 results["crawlability"].get("_probe_status",
                                             results["crawlability"].get("render_engine", "ok")))
@@ -466,8 +547,29 @@ def run_offsite_probes(url: str, brand: str | None = None,
     queries = _browser_ai_queries(results, url, brand, industry_hint,
                                   product_hint, geography)
     logger.info("running browser_ai_capture (Perplexity, venv subprocess): %s", queries)
+    p_t0 = time.monotonic()
     results["perplexity_browser"] = _run_browser_ai(engine_root, url, brand, queries)
+    _record("perplexity_browser", results["perplexity_browser"],
+            time.monotonic() - p_t0)
     logger.info("  [perplexity_browser] %s",
                 results["perplexity_browser"].get("_probe_status",
                                                   results["perplexity_browser"].get("engine", "ok")))
+
+    # --- Assemble the run-trace summary (cost + timing + API-call counts).
+    total_serper = sum(p["serper_calls"] for p in per_probe)
+    total_gemini = sum(p["gemini_calls"] for p in per_probe)
+    probes_ok = sum(1 for p in per_probe if p["status"] == "ok")
+    probes_failed = sum(1 for p in per_probe if p["status"] in ("error", "skipped"))
+    results["_run_trace"] = {
+        "total_duration_s": round(time.monotonic() - run_t0, 3),
+        "per_probe": sorted(per_probe, key=lambda p: p["duration_s"], reverse=True),
+        "total_serper_calls": total_serper,
+        "total_gemini_calls": total_gemini,
+        "est_cost_usd": estimate_cost(total_serper, total_gemini),
+        "probes_ok": probes_ok,
+        "probes_failed": probes_failed,
+        "note": ("serper_calls/gemini_calls reflect probe-reported counts; some "
+                 "probes (reviews/community/social/nap) make Serper calls but do "
+                 "not expose a count and show 0 here."),
+    }
     return results

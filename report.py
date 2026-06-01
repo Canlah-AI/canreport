@@ -25,7 +25,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -141,7 +141,14 @@ def main() -> int:
             industry_hint=detected.get("industry"),
             product_hint=detected.get("product"),
             geography=geography, region_code=region_code)
+        # Pop the run-trace out of the probe results before building the contract
+        # so it never leaks into a rendered module; we attach it under
+        # data["_run_trace"] (a reserved, non-rendered key) ourselves.
+        run_trace = offsite.pop("_run_trace", None)
         data = contract_mod.build_contract(base, offsite)
+        if run_trace is not None:
+            run_trace["generated_at"] = datetime.now(timezone.utc).isoformat()
+            data["_run_trace"] = run_trace
 
     # 3. Render via selected template
     logger.info("rendering with template '%s'", args.template)
@@ -154,6 +161,39 @@ def main() -> int:
 
     json_path = out_dir / f"{stem}.json"
     json_path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    # Ops sidecar: write the run-trace (cost + timing + API calls) for ops, and
+    # append a single line to the persistent cross-run ledger. Best-effort —
+    # never break the report if these writes fail.
+    run_trace = data.get("_run_trace")
+    if run_trace:
+        try:
+            trace_dir = out_dir / "_source"
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            trace_path = trace_dir / f"{stem}-trace.json"
+            trace_path.write_text(
+                json.dumps(run_trace, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8")
+        except OSError as e:
+            logger.warning("trace sidecar write failed: %s", e)
+        try:
+            ledger_path = BASE_DIR / "output" / "_runs.jsonl"
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            ledger_line = json.dumps({
+                "generated_at": run_trace.get("generated_at"),
+                "domain": domain,
+                "date": audit_date,
+                "duration_s": run_trace.get("total_duration_s"),
+                "est_cost_usd": run_trace.get("est_cost_usd"),
+                "serper_calls": run_trace.get("total_serper_calls"),
+                "gemini_calls": run_trace.get("total_gemini_calls"),
+                "probes_ok": run_trace.get("probes_ok"),
+                "probes_failed": run_trace.get("probes_failed"),
+            }, ensure_ascii=False, default=str)
+            with ledger_path.open("a", encoding="utf-8") as fh:
+                fh.write(ledger_line + "\n")
+        except OSError as e:
+            logger.warning("runs ledger append failed: %s", e)
 
     html_path = pdf_path = None
     if args.format in ("html", "both"):
@@ -185,6 +225,31 @@ def main() -> int:
         print(f"  PDF:  {pdf_path}")
     print(f"  JSON: {json_path}")
     print(f"{'=' * 60}")
+
+    # --- Run trace: cost + timing + API calls (printed every run) ----------
+    if run_trace:
+        per_probe = run_trace.get("per_probe", []) or []
+        print(f"  RUN TRACE")
+        print(f"  Total time:  {run_trace.get('total_duration_s', '?')}s")
+        print(f"  Est. cost:   ${run_trace.get('est_cost_usd', 0):.4f} "
+              f"({run_trace.get('total_serper_calls', 0)} Serper + "
+              f"{run_trace.get('total_gemini_calls', 0)} Gemini calls)")
+        print(f"  Probes:      {run_trace.get('probes_ok', 0)} ok / "
+              f"{run_trace.get('probes_failed', 0)} failed")
+        slowest = per_probe[:3]  # already sorted slowest-first by the engine
+        if slowest:
+            print(f"  Slowest 3:")
+            for p in slowest:
+                print(f"    - {p['probe']:<20} {p['duration_s']:>6.1f}s  "
+                      f"({p['serper_calls']}S/{p['gemini_calls']}G, {p['status']})")
+        failed = [p for p in per_probe if p["status"] in ("error", "skipped")]
+        if failed:
+            print(f"  Failed/skipped:")
+            for p in failed:
+                print(f"    - {p['probe']:<20} {p['status']}")
+        print(f"  Trace JSON:  {out_dir / '_source' / (stem + '-trace.json')}")
+        print(f"  Ledger:      {BASE_DIR / 'output' / '_runs.jsonl'}")
+        print(f"{'=' * 60}")
 
     if args.open:
         import subprocess

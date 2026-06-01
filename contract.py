@@ -21,6 +21,7 @@ import json
 from typing import Any
 
 from reconcile import reconcile_modules
+from scoring import compute_overall_score
 
 _FINDING_DEFAULTS = {
     "confidence": 0.85,
@@ -589,6 +590,7 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
         "icon": "🤖", "title_zh": "AI 引用力 — 当客户问 AI，你的品牌出现吗？",
         "title_en": "AI Citation Visibility — Do You Show Up When Customers Ask AI?",
         "score": max(0, min(100, score)),
+        "overall_weight": 1.5,  # GEO money shot — weighted higher in site-health score
         "grade_letter": grade,
         "summary_html": (
             f"<p><strong>{score}/100 · 评级 {grade} · 声量占比 SoV {sov}%</strong></p>"
@@ -1604,6 +1606,7 @@ def _module_roadmap(modules: list[dict], offsite: dict[str, dict]) -> dict:
     return {
         "icon": "🗺️", "title_zh": "90 天 GEO 行动路线图", "title_en": "90-Day GEO Roadmap",
         "score": _module_score(findings),
+        "overall_weight": 0.0,  # synthesis/plan module — must not contaminate site-health score
         "summary_html": (
             f"<p>将全部诊断综合为<strong>按月排序</strong>的 90 天计划："
             f"Month 1 基础修复（{len(p0)} P0 / {len(p1)} P1 快赢）→ "
@@ -1672,7 +1675,7 @@ def build_contract(base: dict, offsite: dict[str, dict]) -> dict:
             elif sev == "PASS":
                 passes += 1
     data["p0_count"], data["p1_count"], data["p2_count"], data["pass_count"] = p0, p1, p2, passes
-    data["overall_score"] = max(0, 100 - (p0 * 25 + p1 * 10 + p2 * 3))
+    data["overall_score"] = compute_overall_score(data["modules"])
 
     # Re-rank top actions across all findings — leverage-aware, GEO-first.
     data["top_actions"] = _build_top_actions(data["modules"])
@@ -1684,6 +1687,13 @@ def build_contract(base: dict, offsite: dict[str, dict]) -> dict:
     data["next_steps_text"] = (
         f"本报告中标记为 P0 的 {p0} 个问题建议在 7 天内优先处理。"
         f"如需协助实施，请联系我们的技术团队。")
+    # Run-trace passthrough: the engine may stash a cost/timing/API-call trace
+    # under offsite["_run_trace"]. report.py normally pops it before calling us
+    # and attaches it itself (adding generated_at); but if a caller leaves it in
+    # offsite, propagate it here so data["_run_trace"] is always populated when a
+    # trace exists. We never render it (reserved "_"-prefixed key).
+    if "_run_trace" in offsite and "_run_trace" not in data:
+        data["_run_trace"] = offsite["_run_trace"]
     data["_offsite_raw"] = offsite
     return data
 

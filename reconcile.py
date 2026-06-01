@@ -111,6 +111,160 @@ def _blog_verifiable_signal(offsite: dict[str, dict]) -> "tuple[bool, str]":
     return False, "路径探测 (HEAD)"
 
 
+def _blog_crawl_override_signal(offsite: dict[str, dict]) -> "tuple[bool, str]":
+    """SECOND, independent-of-sitemap signal that a blog section exists.
+
+    The original ``_blog_override_signal`` leans on sitemap-derived data
+    (freshness.url_categories / crawlability.sitemap). When the sitemap is
+    ABSENT — exactly the case where TRUST-001's HEAD-guess fires — that signal
+    has nothing to read, so the override would be circular (same missing
+    sitemap the asserting probe lacked).
+
+    This extractor instead reads what the crawlability probe ACTUALLY CRAWLED:
+    nav-link mining to click-depth 2 + redirect/canonical evidence. If the
+    crawler ever followed a link to a ``/blog``-shaped URL (e.g. it recorded a
+    redirect chain starting at /blog, or surfaced a /blog canonical), that is a
+    real, sitemap-independent confirmation the section is reachable from the
+    site's own navigation.
+
+    Returns (True, evidence) when such a crawled blog URL is found.
+    """
+    crawl = offsite.get("crawlability", {}) or {}
+
+    def _looks_blog(u: object) -> bool:
+        if not isinstance(u, str):
+            return False
+        low = u.lower()
+        return ("/blog" in low or "/news" in low or "/articles" in low
+                or "/journal" in low)
+
+    crawled_urls: list[str] = []
+    # Redirect chains/loops the crawler actually walked (nav-followed pages).
+    redirects = crawl.get("redirects", {}) or {}
+    for bucket in ("loops", "chains"):
+        for entry in (redirects.get(bucket) or []):
+            if isinstance(entry, dict):
+                if isinstance(entry.get("start"), str):
+                    crawled_urls.append(entry["start"])
+                for u in (entry.get("chain") or []):
+                    crawled_urls.append(u)
+    # Canonical-tag scan over crawled pages (also a crawl-derived URL list).
+    canonical = crawl.get("canonical", {}) or {}
+    for key in ("missing", "cross_canonical"):
+        crawled_urls.extend(canonical.get(key) or [])
+    # Orphan / internal-link mining, if the probe surfaced explicit URLs.
+    internal = crawl.get("internal_links", {}) or {}
+    crawled_urls.extend(internal.get("orphan_pages") or [])
+
+    blog_like = [u for u in crawled_urls if _looks_blog(u)]
+    if blog_like:
+        return True, (
+            f"第二独立信源（技术爬虫沿首页导航爬取至 depth 2，不依赖 sitemap）"
+            f"实际访问到 {len(blog_like)} 个博客/资讯类 URL（如 {blog_like[0]}），"
+            f"证明该板块从站点导航可达。"
+        )
+    return False, ""
+
+
+def _blog_independent_override(offsite: dict[str, dict]) -> "tuple[bool, str]":
+    """Combine BOTH independent blog signals so the override is non-circular.
+
+    Fires if EITHER the sitemap-based signal OR the crawl-nav-based signal
+    confirms a blog. The crawl-nav signal is the one that survives an absent
+    sitemap, breaking the original shared-source flaw where the override read
+    the same sitemap the asserting HEAD-probe never had.
+    """
+    fired, ev = _blog_override_signal(offsite)
+    if fired:
+        return True, ev
+    return _blog_crawl_override_signal(offsite)
+
+
+# ---------------------------------------------------------------------------
+# Reputation independent signals (REPUT-*)
+# ---------------------------------------------------------------------------
+# These absence claims are judged from ONE SERP region / ONE surface probe.
+# Absence-of-evidence is NOT evidence-of-absence, so they are softened — except
+# Facebook, which an INDEPENDENT probe (social_influence_scan) can override.
+
+def _serp_region_label(offsite: dict[str, dict]) -> str:
+    """Best-effort human label for the SERP region the reputation probe used.
+
+    The reputation/reviews probe queries ONE SERP locale. We surface that
+    locale so the softened wording reads honestly ("未在 {region} SERP 检测到")
+    instead of implying a global negative. Falls back to a neutral phrase when
+    no region code is propagated.
+    """
+    rep = offsite.get("reputation", {}) or {}
+    for key in ("serp_region", "region", "region_code", "gl", "market"):
+        val = rep.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip().upper()
+    return "单一 SERP 区域"
+
+
+def _facebook_override_signal(offsite: dict[str, dict]) -> "tuple[bool, str]":
+    """Did the INDEPENDENT social probe find a Facebook URL?
+
+    The reputation probe's "未链接 Facebook 商业主页" reads
+    reputation.facebook.page_url. The social_influence_scan probe independently
+    extracts on-site social links into social.platforms.facebook.url. If THAT
+    probe found a Facebook URL, the reputation "no Facebook" claim is false.
+    """
+    social = offsite.get("social", {}) or {}
+    platforms = social.get("platforms", {}) or {}
+    fb = platforms.get("facebook", {}) or {}
+    fb_url = fb.get("url")
+    if isinstance(fb_url, str) and fb_url.strip():
+        return True, (
+            f"独立信源（社媒影响力扫描的站内链接挖掘）在站点上检测到 Facebook 主页"
+            f"链接（{fb_url}），声誉探针的「无 Facebook」判定不成立。"
+        )
+    return False, ""
+
+
+def _reput_region_verifiable(offsite: dict[str, dict]) -> "tuple[bool, str]":
+    """Reputation SERP absences are NEVER region-complete -> always soften.
+
+    A single-locale SERP/listing query cannot prove a brand has no Google
+    reviews / no TripAdvisor listing globally. We always return could_verify
+    =False so the finding is reworded to "未在 {region} SERP 检测到 …", carrying
+    the region label as the method so the honest wording is region-scoped.
+    """
+    label = _serp_region_label(offsite)
+    # Avoid a double "SERP" when the fallback label already says it.
+    method = label if "SERP" in label else f"{label} SERP"
+    return False, method
+
+
+# ---------------------------------------------------------------------------
+# On-site single-source absences with no independent off-site signal (TRACK/SPEED)
+# ---------------------------------------------------------------------------
+# These come from ONE homepage-HTML / ONE response-header scrape. There is no
+# independent probe in `offsite` that could contradict them, so they can only be
+# DOWNGRADED to honest "未通过X检测到" wording — never overridden, never asserted
+# as flat absence.
+
+def _homepage_html_verifiable(_offsite: dict[str, dict]) -> "tuple[bool, str]":
+    """Tracking absence is from a single homepage-HTML scrape -> soften.
+
+    GTM-injected tags, server-side tagging, and consent-gated tags are all
+    invisible to a one-shot homepage HTML fetch. We can never honestly assert
+    "no tracking at all", so always soften to "首页 HTML 未检测到 …".
+    """
+    return False, "首页 HTML"
+
+
+def _response_header_verifiable(_offsite: dict[str, dict]) -> "tuple[bool, str]":
+    """CDN absence is from a single response-header probe -> soften.
+
+    CNAME-flattened Cloudflare, origin-pull CDNs, and header-stripping configs
+    routinely hide from a single header read. We never assert "no CDN", only
+    "未通过响应头检测到 CDN".
+    """
+    return False, "响应头"
+
+
 # ---------------------------------------------------------------------------
 # CrossCheck registry entry
 # ---------------------------------------------------------------------------
@@ -137,7 +291,10 @@ class CrossCheck:
         thing_zh: str,
         override: Predicate | None = None,
         verifiable: Predicate | None = None,
-        absence_terms: tuple[str, ...] = ("未检测到", "未发现", "缺少", "没有", "无内容"),
+        absence_terms: tuple[str, ...] = (
+            "未检测到", "未发现", "缺少", "没有", "无内容",
+            "无收录", "无 ", "未链接", "未出现",
+        ),
         downgrade_to: str = "P2",
         suppress: bool = True,
     ) -> None:
@@ -164,16 +321,98 @@ class CrossCheck:
 
 CROSS_CHECKS: list[CrossCheck] = [
     # On-site trust probe TRUST-001: "未检测到博客/资讯内容板块".
-    # Independent contradiction: the off-site sitemap/freshness crawl found real
-    # blog URLs (classic Shopify /blogs/<handle> false-negative).
+    # Independent contradiction: the off-site sitemap/freshness crawl OR the
+    # crawlability nav-link mining found real blog URLs (classic Shopify
+    # /blogs/<handle> false-negative).
+    #
+    # FIX (shared-source flaw): the override now reads TWO independent signals
+    # via _blog_independent_override — the sitemap-based one AND a second,
+    # crawl-nav-based one (_blog_crawl_override_signal). The asserting probe
+    # HEAD-guessed a path list with NO sitemap; the crawl-nav signal does not
+    # depend on a sitemap, so the override is no longer circular.
     CrossCheck(
         rule_id_prefix="TRUST-001",
         guards="no blog / content hub",
         thing_zh="博客/资讯内容板块",
-        override=_blog_override_signal,
+        override=_blog_independent_override,
         verifiable=_blog_verifiable_signal,
         downgrade_to="P2",
         suppress=True,
+    ),
+
+    # --- Reputation: single-SERP-region absence claims (REPUT-*) ------------
+    # REPUT-001: "无 Google Business Profile 评价" — judged from ONE SERP region.
+    # Absence-of-evidence ≠ evidence-of-absence -> soften to
+    # "未在 {region} SERP 检测到 …". No independent override exists.
+    CrossCheck(
+        rule_id_prefix="REPUT-001",
+        guards="no Google reviews in SERP (single region)",
+        thing_zh="Google Business Profile 评价",
+        override=None,
+        verifiable=_reput_region_verifiable,
+        downgrade_to="P2",
+        suppress=False,
+    ),
+    # REPUT-004: "未链接 Facebook 商业主页" — reputation probe read ONE surface.
+    # OVERRIDE: the independent social_influence_scan probe may have found a
+    # Facebook URL on the site. If so, suppress the false "no Facebook" claim.
+    # If not, soften to "未在 {region} SERP 检测到 Facebook 主页".
+    CrossCheck(
+        rule_id_prefix="REPUT-004",
+        guards="no Facebook page (single-surface)",
+        thing_zh="Facebook 商业主页",
+        override=_facebook_override_signal,
+        verifiable=_reput_region_verifiable,
+        downgrade_to="P2",
+        suppress=True,
+    ),
+    # REPUT-003 / REPUT-005: "无 TripAdvisor 收录" — single-region listing query.
+    # No independent contradiction available -> soften to region-scoped wording.
+    CrossCheck(
+        rule_id_prefix="REPUT-003",
+        guards="no TripAdvisor listing (single region)",
+        thing_zh="TripAdvisor 收录",
+        override=None,
+        verifiable=_reput_region_verifiable,
+        downgrade_to="P2",
+        suppress=False,
+    ),
+    CrossCheck(
+        rule_id_prefix="REPUT-005",
+        guards="no TripAdvisor listing (single region)",
+        thing_zh="TripAdvisor 收录",
+        override=None,
+        verifiable=_reput_region_verifiable,
+        downgrade_to="P2",
+        suppress=False,
+    ),
+
+    # --- Tracking: single homepage-HTML scrape (TRACK-*) -------------------
+    # TRACK-001: "Thank You 页面未检测到转化追踪代码" — a one-shot HTML scrape
+    # misses GTM-container / server-side / consent-gated tags. Never assert flat
+    # absence; soften to "首页 HTML 未检测到 …（可能为服务端/GTM 容器加载）".
+    CrossCheck(
+        rule_id_prefix="TRACK-001",
+        guards="no conversion tracking (single homepage HTML scrape)",
+        thing_zh="追踪代码（可能为服务端/GTM 容器加载）",
+        override=None,
+        verifiable=_homepage_html_verifiable,
+        downgrade_to="P2",
+        suppress=False,
+    ),
+
+    # --- Speed: single response-header CDN probe (SPEED-*) -----------------
+    # SPEED-002: "未检测到 CDN 服务" — one header read; CNAME-flattened Cloudflare
+    # and origin-pull CDNs are often header-invisible. Soften to
+    # "未通过响应头检测到 CDN" — never flat absence.
+    CrossCheck(
+        rule_id_prefix="SPEED-002",
+        guards="no CDN (single response-header probe)",
+        thing_zh="CDN",
+        override=None,
+        verifiable=_response_header_verifiable,
+        downgrade_to="P2",
+        suppress=False,
     ),
 ]
 
@@ -189,22 +428,31 @@ def _soften_wording(text: str, thing_zh: str, method: str,
     "未检测到博客/资讯内容板块" -> "未通过路径探测 (HEAD) 检测到博客/资讯内容板块".
     Falls back to a generic honest sentence if no absence term is present.
     """
+    # A "SERP"/region scope reads more naturally as "未在 {region} 检测到" than
+    # "未通过 {region} 检测到" — pick the right preposition by method shape.
+    is_scope = method.endswith("SERP") or method.endswith("区域")
+    lead = f"未在{method}" if is_scope else f"未通过{method}"
     if not text:
-        return f"未通过{method}检测到{thing_zh}（该信号未经独立验证）。"
-    # Map each confident absence verb to its honest "未通过<method>…" form so the
-    # sentence stays grammatical (e.g. "未检测到" -> "未通过路径探测检测到").
+        return f"{lead}检测到{thing_zh}（该信号未经独立验证）。"
+    # Map each confident absence verb to its honest "未在/未通过<method>…" form so
+    # the sentence stays grammatical (e.g. "未检测到" -> "未通过路径探测检测到",
+    # "无收录" -> "未在 US SERP 检测到收录").
     honest = {
-        "未检测到": f"未通过{method}检测到",
-        "未发现": f"未通过{method}发现",
-        "缺少": f"未通过{method}发现",
-        "没有": f"未通过{method}发现",
-        "无内容": f"未通过{method}发现内容",
+        "未检测到": f"{lead}检测到",
+        "未发现": f"{lead}发现",
+        "缺少": f"{lead}发现",
+        "没有": f"{lead}发现",
+        "无内容": f"{lead}发现内容",
+        "无收录": f"{lead}检测到收录",
+        "无 ": f"{lead}检测到 ",
+        "未链接": f"{lead}检测到",
+        "未出现": f"{lead}检测到",
     }
     for term in absence_terms:
         if term in text:
-            return text.replace(term, honest.get(term, f"未通过{method}{term}"), 1)
+            return text.replace(term, honest.get(term, f"{lead}{term}"), 1)
     # No matched absence term — prepend an honest qualifier.
-    return f"（未通过{method}独立验证）{text}"
+    return f"（{lead}独立验证）{text}"
 
 
 def _mark_overridden(finding: dict[str, Any], cc: CrossCheck, evidence: str) -> None:
@@ -224,10 +472,12 @@ def _mark_overridden(finding: dict[str, Any], cc: CrossCheck, evidence: str) -> 
 def _mark_softened(finding: dict[str, Any], cc: CrossCheck, method: str) -> None:
     """Downgrade + reword an unverifiable absence finding in place."""
     finding["severity"] = cc.downgrade_to
-    title = finding.get("title_zh", "")
-    finding["title_zh"] = _soften_wording(title, cc.thing_zh, method, cc.absence_terms)
-    ev = finding.get("evidence", "")
-    finding["evidence"] = _soften_wording(ev, cc.thing_zh, method, cc.absence_terms)
+    # Reword every field that can carry a confident absence claim, so the report
+    # never overclaims in the title, the impact narrative, OR the raw evidence.
+    for field in ("title_zh", "impact_zh", "evidence"):
+        text = finding.get(field, "")
+        if text:
+            finding[field] = _soften_wording(text, cc.thing_zh, method, cc.absence_terms)
     finding["_reconciled"] = "softened"
     finding["confidence"] = min(float(finding.get("confidence", 0.9) or 0.9), 0.6)
 

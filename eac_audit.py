@@ -26,6 +26,8 @@ from urllib.parse import urlparse
 
 from jinja2 import Environment, FileSystemLoader
 
+from scoring import compute_overall_score
+
 TEMPLATE_DIR = Path(__file__).parent / "templates" / "google"
 
 
@@ -125,10 +127,9 @@ def run_audit(
         name for name in ["speed", "form", "trust", "tracking"]
         if results.get(name, {}).get("_probe_status") not in ("skipped", "error")
     }
-    active_p0 = [f for f in p0 if f.get("_source_probe") in _active_probes]
-    active_p1 = [f for f in p1 if f.get("_source_probe") in _active_probes]
-    active_p2 = [f for f in p2 if f.get("_source_probe") in _active_probes]
-    overall_score = max(0, 100 - (len(active_p0) * 25 + len(active_p1) * 10 + len(active_p2) * 3))
+    # overall_score is computed below from the assembled module list (see the
+    # `modules = [...]` block) via the shared compute_overall_score helper —
+    # weighted module-health average + bounded P0 cap, not a saturating subtraction.
 
     top_actions = []
     for f in (p0 + p1)[:3]:
@@ -269,6 +270,8 @@ def run_audit(
             "findings": tracking_findings,
         },
     ]
+
+    overall_score = compute_overall_score(modules)
 
     report_data = {
         "brand_name": brand,
