@@ -624,25 +624,29 @@
     <li class="toc-item"><a href="#mod-{{ loop.index }}">{{ mod.title_zh }}</a></li>
     {% endfor %}
     <li class="toc-item"><a href="#readiness">Google 生态就绪度</a></li>
+    {% set toc = namespace(n = 0) %}
     {% for ap in appendix %}
-    <li class="toc-item"><a href="#geo-appendix-{{ loop.index }}">{{ ap.title }}</a></li>
+    {% set toc.n = toc.n + 1 %}
+    <li class="toc-item"><a href="#geo-appendix-{{ loop.index }}">附件 {{ 'ABCDEFGHIJ'[toc.n - 1] }} — {{ ap.title }}</a></li>
     {% endfor %}
-    {% if recommendations and recommendations.blog_content_matrix %}
-    <li class="toc-item"><a href="#deliverable-a">附件 A: 内容矩阵模板</a></li>
+    {% if recommendations and recommendations.blog_content_matrix %}{% set toc.n = toc.n + 1 %}
+    <li class="toc-item"><a href="#deliverable-a">附件 {{ 'ABCDEFGHIJ'[toc.n - 1] }} — 内容矩阵模板</a></li>
     {% endif %}
-    {% if recommendations and recommendations.whitepaper_template %}
-    <li class="toc-item"><a href="#deliverable-b">附件 B: 行业白皮书结构模板</a></li>
+    {% if recommendations and recommendations.whitepaper_template %}{% set toc.n = toc.n + 1 %}
+    <li class="toc-item"><a href="#deliverable-b">附件 {{ 'ABCDEFGHIJ'[toc.n - 1] }} — 行业白皮书结构模板</a></li>
     {% endif %}
-    {% if recommendations and recommendations.product_page_template %}
-    <li class="toc-item"><a href="#deliverable-c">附件 C: 高转化产品详情页模板</a></li>
+    {% if recommendations and recommendations.product_page_template %}{% set toc.n = toc.n + 1 %}
+    <li class="toc-item"><a href="#deliverable-c">附件 {{ 'ABCDEFGHIJ'[toc.n - 1] }} — 高转化产品详情页模板</a></li>
     {% endif %}
-    {% if form_best_practices and form_best_practices.recommended_fields_by_funnel %}
-    <li class="toc-item"><a href="#deliverable-d">附件 D: 留资表单最佳实践模板</a></li>
-    <li class="toc-item"><a href="#deliverable-e">附件 E: 表单字段数 vs 转化率基准</a></li>
-    {% if form_best_practices.design_guidelines %}
-    <li class="toc-item"><a href="#deliverable-f">附件 F: 表单设计最佳实践</a></li>
+    {% if form_best_practices and form_best_practices.recommended_fields_by_funnel %}{% set toc.n = toc.n + 1 %}
+    <li class="toc-item"><a href="#deliverable-d">附件 {{ 'ABCDEFGHIJ'[toc.n - 1] }} — 留资表单最佳实践模板</a></li>
+    {% if form_best_practices.field_friction_benchmarks %}{% set toc.n = toc.n + 1 %}
+    <li class="toc-item"><a href="#deliverable-e">附件 {{ 'ABCDEFGHIJ'[toc.n - 1] }} — 表单字段数 vs 转化率基准</a></li>
     {% endif %}
-    {% endif %}
+    {% if form_best_practices.design_guidelines %}{% set toc.n = toc.n + 1 %}
+    <li class="toc-item"><a href="#deliverable-f">附件 {{ 'ABCDEFGHIJ'[toc.n - 1] }} — 表单设计最佳实践</a></li>
+    {% endif %}{# end: design_guidelines toc #}
+    {% endif %}{# end: recommended_fields_by_funnel (form D/E/F toc) #}
     <li class="toc-item"><a href="#methodology">方法论与披露</a></li>
     <li class="toc-item"><a href="#next">下一步</a></li>
   </ol>
@@ -772,7 +776,7 @@
 <section class="eac-deliverable" id="geo-appendix-{{ loop.index }}">
   <div class="eac-deliverable-header">
     <div>
-      <div class="eac-deliverable-title">{{ ap.title }}</div>
+      <div class="eac-deliverable-title">附件 {{ 'ABCDEFGH'[loop.index0] }} — {{ ap.title }}</div>
       {% if ap.subtitle %}<div class="eac-deliverable-subtitle">{{ ap.subtitle }}</div>{% endif %}
     </div>
   </div>
@@ -793,16 +797,20 @@
 </section>
 {% endfor %}
 
-{# ==== EMBEDDED DELIVERABLES (legacy ecommerce templates — only if probe still emits them) ==== #}
-{# --- Appendix A: Content Matrix (from trust probe) --- #}
+{# ==== EMBEDDED DELIVERABLES (reusable content/form templates) ==== #}
+{# Numbered consecutively AFTER the GEO appendices via a namespace counter, #}
+{# so labels never collide (GEO = A/B/C, these continue D/E/F...). #}
+{% set apx = namespace(n = appendix | length) %}
+{# --- Content Matrix (from trust probe) --- #}
 {% if recommendations and recommendations.blog_content_matrix %}
+{% set apx.n = apx.n + 1 %}
 {% set matrix = recommendations.blog_content_matrix %}
 <section class="eac-deliverable" id="deliverable-a">
   <div class="eac-deliverable-header">
-    <div class="eac-deliverable-num">A</div>
+    <div class="eac-deliverable-num">{{ 'ABCDEFGHIJ'[apx.n - 1] }}</div>
     <div>
       <div class="eac-deliverable-title">内容矩阵模板</div>
-      <div class="eac-deliverable-subtitle">Appendix A: Blog Content Matrix Template</div>
+      <div class="eac-deliverable-subtitle">Blog Content Matrix Template</div>
     </div>
   </div>
   <p class="small muted">{{ matrix.description }}</p>
@@ -840,13 +848,14 @@
 
 {# --- Appendix B: Whitepaper Structure (from trust probe) --- #}
 {% if recommendations and recommendations.whitepaper_template %}
+{% set apx.n = apx.n + 1 %}
 {% set wp = recommendations.whitepaper_template %}
 <section class="eac-deliverable" id="deliverable-b">
   <div class="eac-deliverable-header">
-    <div class="eac-deliverable-num">B</div>
+    <div class="eac-deliverable-num">{{ 'ABCDEFGHIJ'[apx.n - 1] }}</div>
     <div>
       <div class="eac-deliverable-title">行业白皮书结构模板</div>
-      <div class="eac-deliverable-subtitle">Appendix B: Whitepaper Structure Template</div>
+      <div class="eac-deliverable-subtitle">Whitepaper Structure Template</div>
     </div>
   </div>
   <p class="small muted">{{ wp.description }}  |  建议篇幅 8-15 页</p>
@@ -873,13 +882,14 @@
 
 {# --- Appendix C: Product Page Wireframe (from trust probe) --- #}
 {% if recommendations and recommendations.product_page_template %}
+{% set apx.n = apx.n + 1 %}
 {% set ppt = recommendations.product_page_template %}
 <section class="eac-deliverable" id="deliverable-c">
   <div class="eac-deliverable-header">
-    <div class="eac-deliverable-num">C</div>
+    <div class="eac-deliverable-num">{{ 'ABCDEFGHIJ'[apx.n - 1] }}</div>
     <div>
       <div class="eac-deliverable-title">高转化产品详情页模板</div>
-      <div class="eac-deliverable-subtitle">Appendix C: High-Conversion Product Page Wireframe</div>
+      <div class="eac-deliverable-subtitle">High-Conversion Product Page Wireframe</div>
     </div>
   </div>
   <p class="small muted">{{ ppt.description }}</p>
@@ -904,12 +914,13 @@
 
 {# --- Appendix D: Form Mockup (from form probe) --- #}
 {% if form_best_practices and form_best_practices.recommended_fields_by_funnel %}
+{% set apx.n = apx.n + 1 %}
 <section class="eac-deliverable" id="deliverable-d">
   <div class="eac-deliverable-header">
-    <div class="eac-deliverable-num">D</div>
+    <div class="eac-deliverable-num">{{ 'ABCDEFGHIJ'[apx.n - 1] }}</div>
     <div>
       <div class="eac-deliverable-title">留资表单最佳实践模板</div>
-      <div class="eac-deliverable-subtitle">Appendix D: Lead Form Mockup by Funnel Stage</div>
+      <div class="eac-deliverable-subtitle">Lead Form Mockup by Funnel Stage</div>
     </div>
   </div>
   <p class="small muted">按营销漏斗阶段设计不同复杂度的表单，平衡线索量与线索质量。</p>
@@ -936,13 +947,15 @@
   </div>
 </section>
 
-{# --- Appendix E: Form Conversion Benchmark Chart --- #}
+{# --- Form Conversion Benchmark Chart --- #}
+{% if form_best_practices and form_best_practices.field_friction_benchmarks %}
+{% set apx.n = apx.n + 1 %}
 <section class="eac-deliverable" id="deliverable-e">
   <div class="eac-deliverable-header">
-    <div class="eac-deliverable-num">E</div>
+    <div class="eac-deliverable-num">{{ 'ABCDEFGHIJ'[apx.n - 1] }}</div>
     <div>
       <div class="eac-deliverable-title">表单字段数 vs 转化率基准</div>
-      <div class="eac-deliverable-subtitle">Appendix E: Form Field Count vs Conversion Rate Benchmark</div>
+      <div class="eac-deliverable-subtitle">Form Field Count vs Conversion Rate Benchmark</div>
     </div>
   </div>
   <p class="small muted">每增加一个字段，转化率下降约 {{ form_best_practices.field_friction_benchmarks.per_field_conversion_drop }}。超过 7 个字段时弃填率达 {{ form_best_practices.field_friction_benchmarks.abandonment_rate_above_7_fields }}。</p>
@@ -978,15 +991,17 @@
   </div>
   <div class="eac-bench-source">数据来源: {{ form_best_practices.field_friction_benchmarks.source }} | 最佳字段数: {{ form_best_practices.field_friction_benchmarks.optimal_field_count }}</div>
 </section>
+{% endif %}
 
-{# --- Appendix F: Form Design Guidelines --- #}
-{% if form_best_practices.design_guidelines %}
+{# --- Form Design Guidelines --- #}
+{% if form_best_practices and form_best_practices.design_guidelines %}
+{% set apx.n = apx.n + 1 %}
 <section class="eac-deliverable" id="deliverable-f">
   <div class="eac-deliverable-header">
-    <div class="eac-deliverable-num">F</div>
+    <div class="eac-deliverable-num">{{ 'ABCDEFGHIJ'[apx.n - 1] }}</div>
     <div>
       <div class="eac-deliverable-title">表单设计最佳实践</div>
-      <div class="eac-deliverable-subtitle">Appendix F: Form Design Best Practices with Benchmarks</div>
+      <div class="eac-deliverable-subtitle">Form Design Best Practices with Benchmarks</div>
     </div>
   </div>
   <div class="eac-guideline-list">
@@ -1010,8 +1025,8 @@
   </div>
   {% endif %}
 </section>
-{% endif %}
-{% endif %}
+{% endif %}{# end: form design guidelines #}
+{% endif %}{# end: form mockup wrapper (D/E/F) #}
 
 {# ==== Google Ecosystem Readiness ==== #}
 {% if readiness_items %}
