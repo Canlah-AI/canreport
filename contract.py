@@ -786,8 +786,8 @@ def _module_backlinks_news(backlink: dict, news: dict) -> dict:
         findings.append(_finding(
             "P2", f"实体消歧：识别并排除 {total_namesakes} 个同名异主实体",
             (f"我们检测到 {total_namesakes} 个与品牌同名但属于不同企业的实体"
-             f"（如 modernshade.net = 亚利桑那窗帘公司），已从「真实媒体报道」与"
-             f"「外联线索」中排除，避免误导性建议。"),
+             + (f"（如 {ex_str}）" if ex_str else "")
+             + "，已从「真实媒体报道」与「外联线索」中排除，避免误导性建议。"),
             "无需行动 — 此为方法论质量保证；后续外联与 PR 仅针对已验证的真实品牌资产。",
             "OFFSITE-000", "backlink",
             evidence=ex_str or f"反链同名 {bl_namesake_n}、新闻同名 {news_namesake_n}。",
@@ -882,7 +882,11 @@ def _module_community_presence(community: dict) -> dict:
         if len(r_mentions) > 6:
             rows.append([f"+{len(r_mentions) - 6} 更多", "", ""])
 
-    rows.append(["Quora 提及质量", "多为同名误匹配（颜色/旗帜 'modern shade'）", "⚠️ 低相关"])
+    _q_n = quora.get("mention_count", 0)
+    _q_conf = quora.get("confidence", "low")
+    rows.append(["Quora 提及质量",
+                 f"{_q_n} 条，置信度 {_q_conf}（需人工区分品牌 vs 通用短语）",
+                 "⚠️ 待校验" if _q_conf == "low" else "—"])
 
     findings: list[dict] = []
     # FINDING 1 — Reddit strength (PASS)
@@ -897,11 +901,10 @@ def _module_community_presence(community: dict) -> dict:
     # FINDING 2 — confidence caveat
     findings.append(_finding(
         "P2", "提及数据置信度有限，需校验",
-        (f"扫描级置信度为 '{scan_conf}'（样本 {sample_n}，每查询取 top-10 Serper 结果），"
-         "且 10 条 Quora '提及' 几乎全是 'modern shade' 作为颜色/旗帜描述的误匹配 — "
-         f"STRONG 评级高估了真实品牌对话。"),
-        ("将计数视为发现信号；上报客户前人工区分品牌 vs 通用短语提及，"
-         "且不要把 Quora 当作渠道优化。"),
+        (f"扫描级置信度为 '{scan_conf}'（样本 {sample_n}，每查询取 top-10 Serper 结果）。"
+         f"部分平台提及可能是品牌名作为通用短语的误匹配，"
+         f"评级可能高估真实品牌对话，建议人工复核。"),
+        ("将计数视为发现信号；上报客户前人工区分品牌 vs 通用短语提及。"),
         "COMMUNITY-002", "community",
         evidence=_trunc(method, 80)))
     # FINDING 3 — forums gap
@@ -1059,7 +1062,7 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
             "P2", "缺少博客/编辑内容枢纽",
             (f"站点 {total_urls} URL 中 0 篇博客（全是产品/静态页），缺乏话题权威 (E-E-A-T) 内容，"
              "AI 搜索更倾向引用有教育性长文的站点。"),
-            "建内容枢纽，针对 'how to choose'/'best ... gazebo' 类查询产出长文（正是竞品被 AI 引用的查询）。",
+            "建内容枢纽，针对 'how to choose' / 'best {产品类别}' 等买家意图查询产出教育性长文（正是竞品被 AI 引用的查询类型）。",
             "SCHEMA-006", "freshness",
             evidence=(f"url_categories: 产品 {url_cats.get('product',0)}, 博客 {url_cats.get('blog',0)}, "
                       f"静态 {url_cats.get('static',0)}。高发布速率 ({pv.get('last_30_days',0)}/30天) 是产品页更替，非编辑内容。")))
