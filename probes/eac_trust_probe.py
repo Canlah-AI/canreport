@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +25,8 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     # Normal package import (engine loads this module by file path with the
@@ -37,22 +41,150 @@ except ImportError:  # pragma: no cover - fallback for path-only loads
 UA = "EAC-Audit/1.0 (Canlah AI; Google EAC Partner)"
 TIMEOUT = 10.0
 
+# Realistic browser UA for path-existence probes. Some servers (e.g.
+# cloudsway.ai) return 403/405 to non-browser User-Agents, which would
+# otherwise falsely mark real pages as absent.
+BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+# Tight timeout for path probes so a slow/blocked host can't stall the audit.
+PROBE_TIMEOUT = 5.0
+# Statuses where HEAD is unreliable (method/bot blocked) and we must retry
+# with a real GET before concluding a path is absent.
+HEAD_UNRELIABLE_STATUSES = frozenset({403, 405, 501})
 
-def _detect_site_context(html: str, url: str) -> dict[str, str]:
-    """Extract industry/product context from homepage for personalized recommendations."""
-    title_m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
-    title = title_m.group(1).strip() if title_m else ""
 
-    desc_m = re.search(r'<meta\s+name=["\']description["\']\s+content=["\'](.*?)["\']', html, re.I)
-    desc = desc_m.group(1).strip() if desc_m else ""
+# LLM classifier config (Baidu/Canlah Gemini proxy). The probe stays
+# dependency-light: it calls the Gemini REST endpoint directly via `requests`
+# (already imported) so it works standalone AND inside the engine pool. If no
+# key is set, or the call fails/times out, we fall back to the keyword table.
+_BAIDU_KEY = os.environ.get("BAIDU_API_KEY", "").strip()
+_BAIDU_BASE = os.environ.get(
+    "BAIDU_BASE_URL", "https://overseas.exp.bcevod.com/v1beta"
+).rstrip("/")
+_CLASSIFY_MODEL = os.environ.get("CANLAH_CLASSIFY_MODEL", "gemini-2.5-flash")
+_CLASSIFY_TIMEOUT = float(os.environ.get("CANLAH_CLASSIFY_TIMEOUT", "20"))
 
-    h1_m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.I | re.S)
-    h1 = re.sub(r"<[^>]+>", "", h1_m.group(1)).strip() if h1_m else ""
+# Cache classifications per (domain, signal) so repeated probe() calls in one
+# process (e.g. report.py + tests) don't re-hit the LLM.
+_CLASSIFY_CACHE: dict[str, dict[str, str]] = {}
 
-    domain = urlparse(url).netloc.replace("www.", "")
-    brand = title.split("|")[0].split("-")[0].split("—")[0].strip() if title else domain
+_CLASSIFY_PROMPT = (
+    "You are an industry classifier for B2B and DTC company websites. Given a "
+    "website's domain, title, meta description, H1 heading, and a short body "
+    "text sample, identify its industry and primary product/service.\n\n"
+    "Domain: {domain}\n"
+    "Title: {title}\n"
+    "Meta description: {desc}\n"
+    "H1: {h1}\n"
+    "Body sample: {body}\n\n"
+    "Return ONLY a JSON object (no markdown fence) with these exact keys:\n"
+    "{{\n"
+    '  "industry_zh": "<industry in Chinese, e.g. AI云服务/API平台, 跨境电商, 户外建材>",\n'
+    '  "product_zh": "<primary product/service in Chinese>",\n'
+    '  "industry_en": "<industry in English>",\n'
+    '  "english_buyer_noun": "<the PLURAL product noun a buyer types into a '
+    'search engine — on-category, e.g. AI cloud platforms, LLM API gateways, '
+    'skincare products, outdoor gazebos>",\n'
+    '  "use_case_en": "<short buyer use-case phrase, e.g. enterprise AI, '
+    'sensitive skin, backyard>"\n'
+    "}}\n"
+    "If the page signal is weak, infer the most likely category from the "
+    "domain/brand name and TLD (e.g. a .ai domain named 'Cloudsway' is most "
+    "likely an AI cloud / API platform). NEVER answer with generic placeholders "
+    'like "products in this category" or "company".'
+)
 
-    context_text = f"{title} {desc} {h1}".lower()
+
+def _strip_body_text(html: str, limit: int = 600) -> str:
+    """Best-effort plaintext sample from the homepage body for the classifier."""
+    text = re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
+    text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
+
+
+def _classify_with_llm(
+    domain: str, title: str, desc: str, h1: str, body: str
+) -> dict[str, str] | None:
+    """Classify industry/product via the Baidu/Canlah Gemini proxy.
+
+    Generalizes to ANY industry (cloud, fintech, SaaS, API, DTC...) without a
+    hardcoded keyword table. Returns None on any failure so the caller can fall
+    back to the keyword table. Never raises.
+    """
+    if not _BAIDU_KEY:
+        return None
+
+    cache_key = f"{domain}|{title}|{desc}|{h1}"
+    cached = _CLASSIFY_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    prompt = _CLASSIFY_PROMPT.format(
+        domain=domain or "(unknown)",
+        title=title or "(none)",
+        desc=desc or "(none)",
+        h1=h1 or "(none)",
+        body=body or "(none)",
+    )
+    endpoint = f"{_BAIDU_BASE}/models/{_CLASSIFY_MODEL}:generateContent"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+        },
+    }
+    try:
+        resp = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {_BAIDU_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=_CLASSIFY_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        # Strip a stray ```json fence if the model added one.
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I | re.S).strip()
+        parsed = json.loads(raw)
+    except (requests.RequestException, KeyError, IndexError, ValueError) as e:
+        logger.warning("LLM industry classify failed (%s); using keyword table", e)
+        return None
+
+    industry_zh = str(parsed.get("industry_zh", "")).strip()
+    product_zh = str(parsed.get("product_zh", "")).strip()
+    english_noun = str(parsed.get("english_buyer_noun", "")).strip()
+    if not (industry_zh and product_zh and english_noun):
+        return None
+
+    result = {
+        "industry": industry_zh,
+        "product": product_zh,
+        "industry_en": str(parsed.get("industry_en", "")).strip(),
+        "english_product": english_noun,
+        "use_case": str(parsed.get("use_case_en", "")).strip() or "general use",
+        "_source": "llm",
+    }
+    _CLASSIFY_CACHE[cache_key] = result
+    return result
+
+
+def _classify_with_keywords(context_text: str) -> dict[str, str]:
+    """Offline fallback: broadened keyword table.
+
+    Covers the original DTC clusters PLUS cloud/AI/SaaS/API/developer/fintech/
+    data/infra clusters that the original table lacked. Each branch ALSO yields
+    an on-category `english_product` + `use_case` so the AI-citation buyer
+    queries stay on-category even when the LLM is unavailable.
+    """
 
     def _has_word(keywords: list[str]) -> bool:
         for kw in keywords:
@@ -60,58 +192,136 @@ def _detect_site_context(html: str, url: str) -> dict[str, str]:
                 return True
         return False
 
-    industry = "综合企业"
-    product = "核心产品/服务"
-    if _has_word(["outdoor", "shade", "pergola", "gazebo", "凉亭", "遮阳"]):
-        industry = "户外建材/遮阳产品"
-        product = "户外凉亭/遮阳棚"
-    elif _has_word(["robot", "automation", "机器人", "自动化"]):
-        industry = "智能机器人/自动化"
-        product = "工业机器人/自动化设备"
-    elif _has_word(["3d print", "maker", "制造"]):
-        industry = "3D打印/智能制造"
-        product = "3D打印设备/解决方案"
-    elif _has_word(["education", "academy", "learning", "教育", "培训"]):
-        industry = "教育/培训服务"
-        product = "课程/培训项目"
-    elif _has_word(["earplug", "audio", "hearing", "耳塞"]):
-        industry = "听力保护/音频设备"
-        product = "专业耳塞/听力保护产品"
-    elif _has_word(["delivery", "vehicle", "物流", "配送车"]):
-        industry = "物流配送设备"
-        product = "配送车辆/物流设备"
-    elif _has_word(["food", "restaurant", "餐厅", "饮品", "boba", "cafe", "coffee"]):
-        industry = "餐饮/食品品牌"
-        product = "餐饮产品/饮品"
-    elif _has_word(["artwork", "painting", "bindery", "绘画", "艺术品"]):
-        industry = "艺术/创意产品"
-        product = "艺术用品/创作工具"
-    elif _has_word(["ai", "software", "saas", "platform", "tech", "数据"]):
-        industry = "AI/科技服务"
-        product = "AI解决方案/SaaS平台"
-    elif _has_word(["ecommerce", "e-commerce", "shop", "store", "电商", "跨境"]):
-        industry = "跨境电商"
-        product = "电商产品"
-    elif _has_word(["fashion", "clothing", "apparel", "服装"]):
-        industry = "服装/时尚品牌"
-        product = "服装/配饰产品"
-    elif _has_word(["beauty", "cosmetic", "skincare", "美妆"]):
-        industry = "美妆/护肤品牌"
-        product = "美妆/护肤产品"
-    elif _has_word(["health", "supplement", "wellness", "保健"]):
-        industry = "健康/保健品牌"
-        product = "保健产品/健康方案"
-    elif _has_word(["furniture", "home", "decor", "家居"]):
-        industry = "家居/家具品牌"
-        product = "家居产品/装饰"
-    elif _has_word(["electronics", "device", "gadget", "电子"]):
-        industry = "消费电子/智能设备"
-        product = "电子产品/智能设备"
+    # (match keywords) -> (industry_zh, product_zh, english_product, use_case)
+    clusters: list[tuple[list[str], str, str, str, str]] = [
+        (["outdoor", "shade", "pergola", "gazebo", "awning", "patio", "canopy",
+          "凉亭", "遮阳"],
+         "户外建材/遮阳产品", "户外凉亭/遮阳棚", "outdoor gazebos", "backyard"),
+        (["robot", "robotics", "automation", "机器人", "自动化"],
+         "智能机器人/自动化", "工业机器人/自动化设备",
+         "industrial robots", "factory automation"),
+        (["3d print", "maker", "制造"],
+         "3D打印/智能制造", "3D打印设备/解决方案",
+         "3d printers", "rapid prototyping"),
+        (["education", "academy", "learning", "course", "教育", "培训"],
+         "教育/培训服务", "课程/培训项目",
+         "online courses", "skill building"),
+        (["earplug", "audio", "hearing", "耳塞"],
+         "听力保护/音频设备", "专业耳塞/听力保护产品",
+         "earplugs", "hearing protection"),
+        (["delivery", "vehicle", "logistics", "物流", "配送车"],
+         "物流配送设备", "配送车辆/物流设备",
+         "delivery vehicles", "last-mile logistics"),
+        (["food", "restaurant", "餐厅", "饮品", "boba", "cafe", "coffee", "beverage",
+          "snack"],
+         "餐饮/食品品牌", "餐饮产品/饮品", "food brands", "healthy eating"),
+        (["artwork", "painting", "bindery", "绘画", "艺术品"],
+         "艺术/创意产品", "艺术用品/创作工具", "art supplies", "creative work"),
+        # --- Cloud / AI / developer-tools / data / infra cluster (NEW) ---
+        (["llm", "model", "inference", "gpt", "openai", "anthropic"],
+         "AI模型/推理服务", "大模型API/推理平台",
+         "LLM API platforms", "enterprise AI"),
+        (["gateway", "api", "endpoint"],
+         "API网关/开发者平台", "API网关/集成平台",
+         "API gateway platforms", "developer integrations"),
+        (["cloud", "云", "infra", "infrastructure", "compute", "serverless",
+          "kubernetes", "container"],
+         "云计算/基础设施", "云平台/基础设施服务",
+         "cloud platforms", "enterprise infrastructure"),
+        (["developer", "devtool", "sdk", "cli", "open source", "开发者"],
+         "开发者工具", "开发者工具/SDK",
+         "developer tools", "software teams"),
+        (["data", "analytics", "warehouse", "pipeline", "etl", "数据", "数仓"],
+         "数据/分析平台", "数据分析/数仓平台",
+         "data analytics platforms", "data teams"),
+        (["fintech", "payment", "payments", "banking", "lending", "支付", "金融"],
+         "金融科技", "支付/金融科技产品",
+         "fintech platforms", "online payments"),
+        (["ai", "software", "saas", "platform", "tech", "app", "tool"],
+         "AI/科技服务", "AI解决方案/SaaS平台",
+         "AI software platforms", "small business"),
+        (["ecommerce", "e-commerce", "shop", "store", "电商", "跨境"],
+         "跨境电商", "电商产品", "ecommerce brands", "online shopping"),
+        (["fashion", "clothing", "apparel", "服装"],
+         "服装/时尚品牌", "服装/配饰产品", "clothing brands", "everyday wear"),
+        (["beauty", "cosmetic", "skincare", "美妆"],
+         "美妆/护肤品牌", "美妆/护肤产品", "skincare products", "sensitive skin"),
+        (["health", "supplement", "wellness", "保健"],
+         "健康/保健品牌", "保健产品/健康方案", "supplement brands", "daily wellness"),
+        (["furniture", "home", "decor", "家居"],
+         "家居/家具品牌", "家居产品/装饰", "furniture", "small spaces"),
+        (["electronics", "device", "gadget", "电子"],
+         "消费电子/智能设备", "电子产品/智能设备",
+         "consumer electronics", "everyday use"),
+    ]
+
+    for kws, industry, product, english_product, use_case in clusters:
+        if _has_word(kws):
+            return {
+                "industry": industry,
+                "product": product,
+                "english_product": english_product,
+                "use_case": use_case,
+                "_source": "keyword",
+            }
+
+    return {
+        "industry": "综合企业",
+        "product": "核心产品/服务",
+        "english_product": "products in this category",
+        "use_case": "general use",
+        "_source": "fallback",
+    }
+
+
+def _detect_site_context(html: str, url: str) -> dict[str, str]:
+    """Extract industry/product context from homepage for personalized recommendations.
+
+    OPTION A (preferred): classify via the Baidu/Canlah Gemini LLM from the
+    homepage title/desc/h1/body. Generalizes to ANY industry without a hardcoded
+    keyword table. Falls back to a broadened offline keyword table (OPTION B)
+    when no LLM key is set or the call fails.
+
+    The returned `english_product` + `use_case` flow into the AI-citation buyer
+    queries (engine.build_buyer_queries) so they stay ON-CATEGORY (e.g.
+    "best AI cloud platforms" instead of "best products in this category").
+    """
+    title_m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+    title = title_m.group(1).strip() if title_m else ""
+
+    desc_m = re.search(r'<meta\s+name=["\']description["\']\s+content=["\'](.*?)["\']', html, re.I)
+    desc = desc_m.group(1).strip() if desc_m else ""
+    if not desc:
+        og_m = re.search(
+            r'<meta\s+(?:property|name)=["\']og:description["\']\s+content=["\'](.*?)["\']',
+            html, re.I,
+        )
+        desc = og_m.group(1).strip() if og_m else ""
+
+    h1_m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.I | re.S)
+    h1 = re.sub(r"<[^>]+>", "", h1_m.group(1)).strip() if h1_m else ""
+
+    domain = urlparse(url).netloc.replace("www.", "")
+    brand = title.split("|")[0].split("-")[0].split("—")[0].strip() if title else domain
+
+    body_sample = _strip_body_text(html)
+
+    # OPTION A: LLM classification (industry-agnostic).
+    classified = _classify_with_llm(domain, title, desc, h1, body_sample)
+
+    # OPTION B fallback: broadened offline keyword table.
+    if classified is None:
+        context_text = f"{title} {desc} {h1} {body_sample}".lower()
+        classified = _classify_with_keywords(context_text)
 
     return {
         "brand": brand,
-        "industry": industry,
-        "product": product,
+        "industry": classified["industry"],
+        "product": classified["product"],
+        "industry_en": classified.get("industry_en", ""),
+        "english_product": classified.get("english_product", ""),
+        "use_case": classified.get("use_case", ""),
+        "context_source": classified.get("_source", "fallback"),
         "title": title,
         "description": desc,
     }
@@ -209,6 +419,51 @@ def _head(url: str) -> int:
         return 0
 
 
+def _get_status(url: str) -> int:
+    """Lightweight GET that streams only a few KB, returns status. 0 on error.
+
+    Used as a fallback when HEAD is unreliable (405/501/403). We stream and
+    read a tiny chunk instead of the full body so a real 200 page is cheap to
+    confirm and we never download large content.
+    """
+    try:
+        with requests.get(
+            url,
+            headers={"User-Agent": BROWSER_UA, "Range": "bytes=0-4095"},
+            timeout=PROBE_TIMEOUT,
+            allow_redirects=True,
+            stream=True,
+        ) as resp:
+            # Touch the stream so the connection is actually established, then
+            # bail early — we only care about the status code.
+            try:
+                next(resp.iter_content(chunk_size=2048), None)
+            except Exception:
+                pass
+            return resp.status_code
+    except Exception:
+        return 0
+
+
+def _probe_path(url: str) -> int:
+    """Probe a URL's existence status with HEAD -> GET fallback.
+
+    Many servers return 405 (Method Not Allowed), 501 (Not Implemented), or
+    403 (bot-blocked) for HEAD but serve 200 on GET (cloudsway.ai does this on
+    /blog, /blogs, /news). When HEAD is unreliable -- or fails outright -- we
+    retry with a lightweight ranged GET using a realistic browser UA and use
+    that status instead. Only a genuine 404/410 from GET means absent.
+
+    Returns the most authoritative status code (0 on total network failure).
+    """
+    head_status = _head(url)
+    if head_status and head_status not in HEAD_UNRELIABLE_STATUSES:
+        return head_status
+    # HEAD blocked or failed -> confirm with a real GET.
+    get_status = _get_status(url)
+    return get_status or head_status
+
+
 # ---------------------------------------------------------------------------
 # Content section checker
 # ---------------------------------------------------------------------------
@@ -220,7 +475,7 @@ def _check_content_paths(base_url: str) -> list[dict[str, Any]]:
 
     def _check_one(path: str) -> dict[str, Any]:
         url = base + path
-        status = _head(url)
+        status = _probe_path(url)
         exists = 200 <= status < 400
         return {"path": path, "status": status, "exists": exists}
 

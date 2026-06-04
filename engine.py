@@ -154,18 +154,35 @@ _PRODUCT_NOUN_MAP: list[tuple[tuple[str, ...], str, str]] = [
 
 def _english_product_and_usecase(industry_hint: str | None,
                                   product_hint: str | None,
-                                  brand: str | None) -> tuple[str, str]:
+                                  brand: str | None,
+                                  english_product_hint: str | None = None,
+                                  use_case_hint: str | None = None) -> tuple[str, str]:
     """Derive an English product noun + use-case from the detected context.
 
-    Brand-agnostic: reads detected industry/product strings (may be Chinese)
-    and maps to an English buyer-search noun. Falls back to a generic noun.
+    Brand-agnostic. Preference order:
+      1. EXPLICIT english_product_hint from the on-site context detector
+         (eac_trust_probe._detect_site_context now LLM-classifies industry +
+         product into an on-category English buyer noun — generalizes to ANY
+         industry without a keyword table). This is the robust path.
+      2. Legacy keyword map over the (possibly Chinese) industry/product hints.
+      3. Generic fallback.
     """
+    # 1. Explicit on-category English noun from the detector (LLM or keyword).
+    if english_product_hint and english_product_hint.strip():
+        noun = english_product_hint.strip()
+        # Treat the detector's own placeholder as "no signal" so we still try
+        # the legacy map below before giving up.
+        if noun.lower() != "products in this category":
+            use_case = (use_case_hint or "").strip() or "general use"
+            return noun, use_case
+
+    # 2. Legacy keyword map over the raw (Chinese/English) hints.
     blob = " ".join(filter(None, [industry_hint, product_hint])).lower()
     for keywords, product, use_case in _PRODUCT_NOUN_MAP:
         if any(k.lower() in blob for k in keywords):
             return product, use_case
-    # Fallback: use the raw product hint if it's already ASCII/English, else
-    # a generic noun built from the brand.
+
+    # 3. Fallback: raw product hint if ASCII/English, else a generic noun.
     if product_hint and product_hint.isascii() and product_hint.strip():
         return product_hint.strip(), "home use"
     return "products in this category", "everyday use"
@@ -224,7 +241,9 @@ def derive_industry_keywords(industry_hint: str | None,
 def build_buyer_queries(industry_hint: str | None,
                         product_hint: str | None,
                         brand: str | None,
-                        geography: str = "United States") -> list[str]:
+                        geography: str = "United States",
+                        english_product_hint: str | None = None,
+                        use_case_hint: str | None = None) -> list[str]:
     """Build exactly 5 buyer-intent queries spanning 4 intent types.
 
     Templates (brand-agnostic). A blank ``geography`` yields broad-market
@@ -236,8 +255,14 @@ def build_buyer_queries(industry_hint: str | None,
       3. {product} comparison                   (comparison)
       4. where to buy affordable {product}[ {geo}](transactional)
       5. best {product} for {use_case}          (problem-led)
+
+    ``english_product_hint`` / ``use_case_hint`` (on-category English noun from
+    the LLM/keyword detector) take precedence so queries stay on-category, e.g.
+    "best AI cloud platforms" instead of "best products in this category".
     """
-    product, use_case = _english_product_and_usecase(industry_hint, product_hint, brand)
+    product, use_case = _english_product_and_usecase(
+        industry_hint, product_hint, brand,
+        english_product_hint, use_case_hint)
     geo = (geography or "").strip()
     suffix = f" {geo}" if geo else ""
     return [
@@ -253,7 +278,9 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
                     industry_hint: str | None = None,
                     product_hint: str | None = None,
                     geography: str = "United States",
-                    region_code: str = "us") -> dict:
+                    region_code: str = "us",
+                    english_product_hint: str | None = None,
+                    use_case_hint: str | None = None) -> dict:
     """Run live_ai_search with EXPLICIT brand-relevant buyer-intent queries.
 
     Bypasses the generic template system (the `queries=` param overrides it
@@ -263,7 +290,9 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
     from dataclasses import asdict
 
     mod = _load_probe_module(engine_root, "live_ai_search")
-    queries = build_buyer_queries(industry_hint, product_hint, brand, geography)
+    queries = build_buyer_queries(
+        industry_hint, product_hint, brand, geography,
+        english_product_hint, use_case_hint)
     logger.info("ai_citation buyer queries: %s", queries)
     report = asyncio.run(mod.run_citation_test(
         target_url=url,
@@ -327,7 +356,9 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
              industry_hint: str | None = None,
              product_hint: str | None = None,
              geography: str = "United States",
-             region_code: str = "us") -> tuple[str, dict, float]:
+             region_code: str = "us",
+             english_product_hint: str | None = None,
+             use_case_hint: str | None = None) -> tuple[str, dict, float]:
     """Run one probe; return (key, output, duration_s). Never raises."""
     t0 = time.monotonic()
     try:
@@ -336,7 +367,9 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
             output = run_ai_citation(
                 engine_root, url, brand,
                 industry_hint=industry_hint, product_hint=product_hint,
-                geography=geography, region_code=region_code)
+                geography=geography, region_code=region_code,
+                english_product_hint=english_product_hint,
+                use_case_hint=use_case_hint)
             return key, output, time.monotonic() - t0
         mod = _load_probe_module(engine_root, module_name)
         fn = getattr(mod, fn_name)
@@ -460,7 +493,9 @@ def _run_browser_ai(engine_root: Path, url: str, brand: str | None,
 def _browser_ai_queries(offsite: dict[str, dict], url: str,
                         brand: str | None, industry_hint: str | None,
                         product_hint: str | None,
-                        geography: str = "United States") -> list[str]:
+                        geography: str = "United States",
+                        english_product_hint: str | None = None,
+                        use_case_hint: str | None = None) -> list[str]:
     """Pick brand-relevant buyer prompts for the Perplexity browser capture.
 
     Prefer the prompt_discovery buyer_prompts (real PAA + templated), else fall
@@ -471,7 +506,9 @@ def _browser_ai_queries(offsite: dict[str, dict], url: str,
     picked = [p.get("prompt") for p in bp if p.get("prompt")][:5]
     if picked:
         return picked
-    return build_buyer_queries(industry_hint, product_hint, brand, geography)
+    return build_buyer_queries(
+        industry_hint, product_hint, brand, geography,
+        english_product_hint, use_case_hint)
 
 
 def run_offsite_probes(url: str, brand: str | None = None,
@@ -479,7 +516,9 @@ def run_offsite_probes(url: str, brand: str | None = None,
                        industry_hint: str | None = None,
                        product_hint: str | None = None,
                        geography: str = "United States",
-                       region_code: str = "us") -> dict[str, dict]:
+                       region_code: str = "us",
+                       english_product_hint: str | None = None,
+                       use_case_hint: str | None = None) -> dict[str, dict]:
     """Run all off-site probes and return {key: probe_output}.
 
     Concurrency is capped at 3 (not 9) on purpose: each probe fires 4-6 Serper
@@ -523,7 +562,8 @@ def run_offsite_probes(url: str, brand: str | None = None,
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [
             pool.submit(_run_one, engine_root, key, mod, fn, nb, url, brand,
-                        industry_hint, product_hint, geography, region_code)
+                        industry_hint, product_hint, geography, region_code,
+                        english_product_hint, use_case_hint)
             for (key, mod, fn, nb) in OFFSITE_PROBES
         ]
         for fut in as_completed(futures):
@@ -545,7 +585,8 @@ def run_offsite_probes(url: str, brand: str | None = None,
     # --- perplexity_browser: Camoufox capture via the superscrape venv python.
     # Uses brand-relevant buyer prompts pulled from the prompts probe result.
     queries = _browser_ai_queries(results, url, brand, industry_hint,
-                                  product_hint, geography)
+                                  product_hint, geography,
+                                  english_product_hint, use_case_hint)
     logger.info("running browser_ai_capture (Perplexity, venv subprocess): %s", queries)
     p_t0 = time.monotonic()
     results["perplexity_browser"] = _run_browser_ai(engine_root, url, brand, queries)

@@ -69,6 +69,43 @@ def _derive_geography(market: str | None) -> tuple[str, str]:
     return _MARKET_GEO.get(first, ("United States", "us"))
 
 
+def resolve_canonical_url(url: str) -> str:
+    """Follow redirects to find the canonical/final URL for a target site.
+
+    Many apex hosts 301-redirect to www (e.g. cloudsway.ai → www.cloudsway.ai),
+    where the real content (e.g. /blog) lives. Probing the apex host directly
+    produces false negatives (no blog, generic industry fallback). We resolve
+    the final URL once here and pass it to EVERY probe so they all hit www.
+
+    A HEAD is tried first (cheap); if the server rejects HEAD we fall back to a
+    GET. On any failure we return the original url unchanged.
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        import requests
+        try:
+            resp = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
+            # Some servers don't support HEAD (405/501) — retry with GET.
+            if resp.status_code >= 400:
+                resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        except requests.RequestException:
+            resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        final = resp.url or url
+    except Exception as exc:  # noqa: BLE001 — resolution must never abort the run
+        logger.warning("canonical host resolve failed for %s (%s); using original", url, exc)
+        return url
+
+    if urlparse(final).netloc != urlparse(url).netloc:
+        logger.info("canonical host resolved: %s → %s", url, final)
+    return final
+
+
 def list_templates() -> list[str]:
     if not TEMPLATES_DIR.is_dir():
         return []
@@ -113,7 +150,10 @@ def main() -> int:
     if not args.url:
         parser.error("url is required (or use --list-templates)")
 
-    url = args.url if urlparse(args.url).scheme else "https://" + args.url
+    raw_url = args.url if urlparse(args.url).scheme else "https://" + args.url
+    # Resolve the canonical/final URL by following redirects so every probe hits
+    # the real host (e.g. apex cloudsway.ai → www.cloudsway.ai where /blog lives).
+    url = resolve_canonical_url(raw_url)
     domain = urlparse(url).netloc or "unknown"
     brand = args.brand or domain
 
@@ -140,7 +180,9 @@ def main() -> int:
             url, brand,
             industry_hint=detected.get("industry"),
             product_hint=detected.get("product"),
-            geography=geography, region_code=region_code)
+            geography=geography, region_code=region_code,
+            english_product_hint=detected.get("english_product"),
+            use_case_hint=detected.get("use_case"))
         # Pop the run-trace out of the probe results before building the contract
         # so it never leaks into a rendered module; we attach it under
         # data["_run_trace"] (a reserved, non-rendered key) ourselves.
