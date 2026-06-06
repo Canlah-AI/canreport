@@ -36,49 +36,56 @@ logger = logging.getLogger("engine")
 # free and contribute $0.
 SERPER_COST_PER_CALL = float(os.environ.get("SERPER_COST_PER_CALL", "0.001"))
 GEMINI_COST_PER_CALL = float(os.environ.get("GEMINI_COST_PER_CALL", "0.0005"))
+# Bright Data SERP (AI-Overview engine in live_ai_search) — pay-for-success.
+BRIGHTDATA_COST_PER_CALL = float(os.environ.get("BRIGHTDATA_COST_PER_CALL", "0.0015"))
 
 
-def estimate_cost(serper_calls: int, gemini_calls: int) -> float:
+def estimate_cost(serper_calls: int, gemini_calls: int, brightdata_calls: int = 0) -> float:
     """Estimated paid-equivalent USD cost for a set of external API calls."""
     return round(serper_calls * SERPER_COST_PER_CALL
-                 + gemini_calls * GEMINI_COST_PER_CALL, 6)
+                 + gemini_calls * GEMINI_COST_PER_CALL
+                 + brightdata_calls * BRIGHTDATA_COST_PER_CALL, 6)
 
 
-def _split_ai_citation_calls(output: dict) -> tuple[int, int]:
-    """Split ai_citation's combined api_calls_made into (serper, gemini).
+def _split_ai_citation_calls(output: dict) -> tuple[int, int, int]:
+    """Split ai_citation's combined api_calls_made into (serper, gemini, brightdata).
 
-    live_ai_search counts Serper + Gemini calls together in api_calls_made.
-    We recover the split from the results list: every gemini_search row that
-    came from a live (non-cached) call is one Gemini call. Serper is then the
-    remainder of the total api_calls_made. Conservative + never negative.
+    live_ai_search counts Serper + Gemini + Bright Data calls together in
+    api_calls_made. We recover the split from the results list: each live
+    gemini_search row is a Gemini call; each live google_ai_overview row is a
+    Bright Data SERP call (BD is now the authoritative AI-Overview engine).
+    Serper is the remainder. Conservative + never negative.
     """
     total = int(output.get("api_calls_made", 0) or 0)
     if total <= 0:
-        return 0, 0
+        return 0, 0, 0
     results = output.get("results", []) or []
     gemini = sum(1 for r in results
                  if isinstance(r, dict) and r.get("engine") == "gemini_search")
+    brightdata = sum(1 for r in results
+                     if isinstance(r, dict) and r.get("engine") == "google_ai_overview")
     gemini = min(gemini, total)
-    serper = max(0, total - gemini)
-    return serper, gemini
+    brightdata = min(brightdata, max(0, total - gemini))
+    serper = max(0, total - gemini - brightdata)
+    return serper, gemini, brightdata
 
 
-def _extract_calls(key: str, output: dict) -> tuple[int, int]:
-    """Return (serper_calls, gemini_calls) for one probe's output.
+def _extract_calls(key: str, output: dict) -> tuple[int, int, int]:
+    """Return (serper_calls, gemini_calls, brightdata_calls) for one probe's output.
 
     Reads whatever the probe reported:
-      - ai_citation: api_calls_made (mixed) → split into serper/gemini
+      - ai_citation: api_calls_made (mixed) → split into serper/gemini/brightdata
       - backlink / prompts / news: api_calls_used (Serper-only)
-      - everything else: no reported counts → (0, 0) honestly
+      - everything else: no reported counts → (0, 0, 0) honestly
     Probes that make Serper calls but do not expose a count (reviews/community/
     social/nap) are recorded as 0 rather than guessed — see _run_trace note.
     """
     if not isinstance(output, dict):
-        return 0, 0
+        return 0, 0, 0
     if key == "ai_citation":
         return _split_ai_citation_calls(output)
     serper = int(output.get("api_calls_used", 0) or 0)
-    return serper, 0
+    return serper, 0, 0
 
 # Python interpreter that has camoufox installed (browser_ai_capture needs it;
 # the default python3 does NOT). Overridable via env for portability.
@@ -303,6 +310,9 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
         queries=queries,
         enable_gemini=True,
         enable_serper=True,
+        # BD SERP is the authoritative AI-Overview engine (gl=us); self-gates on
+        # BRIGHTDATA_API_KEY in env, so this is a no-op when the key is absent.
+        enable_brightdata=True,
     ))
     return asdict(report)
 
@@ -549,12 +559,13 @@ def run_offsite_probes(url: str, brand: str | None = None,
         return "ok"
 
     def _record(key: str, output: dict, duration_s: float) -> None:
-        serper, gemini = _extract_calls(key, output)
+        serper, gemini, brightdata = _extract_calls(key, output)
         per_probe.append({
             "probe": key,
             "duration_s": round(duration_s, 3),
             "serper_calls": serper,
             "gemini_calls": gemini,
+            "brightdata_calls": brightdata,
             "status": _probe_status(output),
         })
 
@@ -599,6 +610,7 @@ def run_offsite_probes(url: str, brand: str | None = None,
     # --- Assemble the run-trace summary (cost + timing + API-call counts).
     total_serper = sum(p["serper_calls"] for p in per_probe)
     total_gemini = sum(p["gemini_calls"] for p in per_probe)
+    total_brightdata = sum(p.get("brightdata_calls", 0) for p in per_probe)
     probes_ok = sum(1 for p in per_probe if p["status"] == "ok")
     probes_failed = sum(1 for p in per_probe if p["status"] in ("error", "skipped"))
     results["_run_trace"] = {
@@ -606,7 +618,8 @@ def run_offsite_probes(url: str, brand: str | None = None,
         "per_probe": sorted(per_probe, key=lambda p: p["duration_s"], reverse=True),
         "total_serper_calls": total_serper,
         "total_gemini_calls": total_gemini,
-        "est_cost_usd": estimate_cost(total_serper, total_gemini),
+        "total_brightdata_calls": total_brightdata,
+        "est_cost_usd": estimate_cost(total_serper, total_gemini, total_brightdata),
         "probes_ok": probes_ok,
         "probes_failed": probes_failed,
         "note": ("serper_calls/gemini_calls reflect probe-reported counts; some "

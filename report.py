@@ -229,6 +229,7 @@ def main() -> int:
                 "est_cost_usd": run_trace.get("est_cost_usd"),
                 "serper_calls": run_trace.get("total_serper_calls"),
                 "gemini_calls": run_trace.get("total_gemini_calls"),
+                "brightdata_calls": run_trace.get("total_brightdata_calls"),
                 "probes_ok": run_trace.get("probes_ok"),
                 "probes_failed": run_trace.get("probes_failed"),
             }, ensure_ascii=False, default=str)
@@ -275,7 +276,8 @@ def main() -> int:
         print(f"  Total time:  {run_trace.get('total_duration_s', '?')}s")
         print(f"  Est. cost:   ${run_trace.get('est_cost_usd', 0):.4f} "
               f"({run_trace.get('total_serper_calls', 0)} Serper + "
-              f"{run_trace.get('total_gemini_calls', 0)} Gemini calls)")
+              f"{run_trace.get('total_gemini_calls', 0)} Gemini + "
+              f"{run_trace.get('total_brightdata_calls', 0)} BrightData calls)")
         print(f"  Probes:      {run_trace.get('probes_ok', 0)} ok / "
               f"{run_trace.get('probes_failed', 0)} failed")
         slowest = per_probe[:3]  # already sorted slowest-first by the engine
@@ -283,7 +285,7 @@ def main() -> int:
             print(f"  Slowest 3:")
             for p in slowest:
                 print(f"    - {p['probe']:<20} {p['duration_s']:>6.1f}s  "
-                      f"({p['serper_calls']}S/{p['gemini_calls']}G, {p['status']})")
+                      f"({p['serper_calls']}S/{p['gemini_calls']}G/{p.get('brightdata_calls', 0)}B, {p['status']})")
         failed = [p for p in per_probe if p["status"] in ("error", "skipped")]
         if failed:
             print(f"  Failed/skipped:")
