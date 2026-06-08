@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from typing import Any
 
 from reconcile import reconcile_modules
@@ -108,28 +109,73 @@ _DEAD_CAPTURE_MARKERS = ("sign up and repeat", "sign up", "log in to continue",
                          "enable javascript", "verify you are human")
 
 
-def _parse_excerpt(raw_excerpt: Any) -> str:
-    """gemini raw_excerpt is a JSON string; pull answer_preview. Else use as-is.
+def _extract_json_string_field(s: str, keys: tuple[str, ...]) -> str:
+    """Pull a string field's value out of a possibly-truncated JSON dump.
 
-    Falls back to the raw string when JSON parsing fails so we never silently
-    drop a real (plain-text) excerpt from another engine.
+    The live_ai_search raw_excerpt is sometimes a serialized dict that gets
+    truncated mid-structure upstream (e.g. cut at `..."grounding_chunk_c`), so
+    json.loads() raises. We still want the human-readable answer_preview prose,
+    not the raw blob. Scan the string value by hand, unescaping JSON escapes,
+    stopping at the closing quote (or end-of-string when truncated).
+    """
+    unescape = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/"}
+    for key in keys:
+        m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"', s)
+        if not m:
+            continue
+        i, out = m.end(), []
+        while i < len(s):
+            ch = s[i]
+            if ch == "\\" and i + 1 < len(s):
+                out.append(unescape.get(s[i + 1], s[i + 1]))
+                i += 2
+                continue
+            if ch == '"':
+                break
+            out.append(ch)
+            i += 1
+        val = "".join(out).strip()
+        if val:
+            return val
+    return ""
+
+
+def _parse_excerpt(raw_excerpt: Any) -> str:
+    """Pull the human-readable AI answer out of a raw_excerpt, never a JSON blob.
+
+    raw_excerpt may be a dict, a clean JSON string, a TRUNCATED JSON string, or
+    genuine plain text from a non-generative engine. Whatever happens, we must
+    not leak a serialized `{"answer_text_chars":...}` debug dict into the
+    client-facing Evidence Pack — so when the value looks like a dict dump we
+    can't parse, we hand-extract answer_preview rather than falling back to the
+    raw string, and return "" (skip the block) if even that fails.
     """
     if not raw_excerpt:
         return ""
     if isinstance(raw_excerpt, dict):
         return str(raw_excerpt.get("answer_preview")
                    or raw_excerpt.get("answer_text") or "").strip()
-    if isinstance(raw_excerpt, str):
-        s = raw_excerpt.strip()
-        try:
-            obj = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            return s
-        if isinstance(obj, dict):
-            return str(obj.get("answer_preview")
-                       or obj.get("answer_text") or "").strip() or s
-        return s
-    return str(raw_excerpt).strip()
+    if not isinstance(raw_excerpt, str):
+        return str(raw_excerpt).strip()
+    s = raw_excerpt.strip()
+    if not s:
+        return ""
+    try:
+        obj = json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        obj = None
+    if isinstance(obj, dict):
+        return str(obj.get("answer_preview")
+                   or obj.get("answer_text") or "").strip()
+    if obj is not None:
+        return s  # genuine non-dict JSON scalar/string
+    # Malformed/truncated. If it smells like a serialized probe dict, recover the
+    # prose by hand; otherwise it's plain text from another engine, pass through.
+    if '"answer_preview"' in s or '"answer_text"' in s:
+        return _extract_json_string_field(s, ("answer_preview", "answer_text"))
+    if s.startswith("{"):
+        return ""  # unparseable dict dump — skip rather than leak it
+    return s
 
 
 def _shorten_url(url: Any, n: int = 72) -> str:
@@ -198,7 +244,9 @@ def _build_evidence_pack(ai: dict, perplexity_browser: dict,
         excerpt = str(r.get("answer_preview") or "").strip()
         if not excerpt:
             continue
-        cited = bool(r.get("cited"))
+        # Honest citation = brand domain appears in sources, not just a name
+        # mention in the answer text (matches the recomputed module rate).
+        cited = bool(r.get("in_sources"))
         comps = [c for c in (r.get("competitors") or r.get("competitors_cited") or []) if c]
         urls = [s.get("url") for s in (r.get("sources") or [])
                 if isinstance(s, dict) and s.get("url")]
@@ -240,7 +288,10 @@ def _evidence_block_html(engine: str, query: str, runs_n: int,
                   if isinstance(run_index, int) else "")
     low_badge = ("　<span style='color:#b45309'>⚠️ 低信号捕获（疑被登录墙/UI 噪声污染）</span>"
                  if low_signal else "")
-    quoted = html.escape(_trunc(excerpt, 700)).replace("\n", "<br>")
+    # Strip markdown bold markers — the AI prose carries '**x**' which would
+    # otherwise render as literal asterisks in the client-facing quote box.
+    clean_excerpt = re.sub(r"\*\*+", "", excerpt)
+    quoted = html.escape(_trunc(clean_excerpt, 700)).replace("\n", "<br>")
     comp_html = ""
     if comps:
         comp_html = ("<div style='font-size:9pt;margin-top:6px;'><strong>同一回答里被推荐的竞品：</strong> "
@@ -311,11 +362,19 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     pb_has_data = (pb_status not in ("skipped", "error")
                    and bool(pb_results or pb_stats.get("queries_total")))
     if pb_has_data:
-        pb_rate = pb_stats.get("citation_rate")
+        # Honest GEO citation = the brand DOMAIN actually appears as a cited
+        # source (in_sources). The probe's own `cited` = in_answer OR in_sources,
+        # which counts brand-NAME mentions in the answer text — including
+        # login-wall captures ("Sign up and repeat your request") and
+        # wrong-entity answers ("emdoor" → steel doors) — and produced a
+        # misleading 100% sitting next to the 0% SoV headline. Recompute on
+        # in_sources only so every engine reports the same definition of cited.
         pb_qtotal = pb_stats.get("queries_total", len(pb_results))
-        pb_qcited = pb_stats.get("queries_cited", 0) or 0
-        pb_positions = [r.get("position") for r in pb_results
-                        if r.get("cited") and r.get("position") is not None]
+        pb_real_cited = [r for r in pb_results if r.get("in_sources")]
+        pb_qcited = len(pb_real_cited)
+        pb_rate = round(pb_qcited / pb_qtotal, 4) if pb_qtotal else 0.0
+        pb_positions = [r.get("position") for r in pb_real_cited
+                        if r.get("position") is not None]
         per_engine["perplexity_browser"] = {
             "present": True,
             "status": "tested",
@@ -792,15 +851,23 @@ def _module_backlinks_news(backlink: dict, news: dict) -> dict:
             "OFFSITE-000", "backlink",
             evidence=ex_str or f"反链同名 {bl_namesake_n}、新闻同名 {news_namesake_n}。",
             confidence=0.9))
-    # FINDING 1
+    # FINDING 1 — describe the ACTUAL domain-type concentration from the real
+    # breakdown; never a hardcoded retail-marketplace example, which fabricates
+    # a mention mix the brand may not have (e.g. a B2B manufacturer is not on
+    # amazon/walmart). Derive the dominant types and the genuine gaps from data.
+    _nonzero = {k: v for k, v in breakdown.items() if v}
+    _top_types = "、".join(k for k, _ in sorted(
+        _nonzero.items(), key=lambda kv: kv[1], reverse=True)[:3]) or "极少"
+    _gaps = [t for t in ("news", "blog", "edu_gov") if breakdown.get(t, 0) == 0]
+    _gap_str = ("、".join(_gaps) + " 类为 0") if _gaps else "权威类型偏薄"
     findings.append(_finding(
         "P1", "反链权威度依赖估算且类型集中",
-        (f"仅约 {ext} 个 SERP 提及估算，且高度偏向零售/市场平台（amazon/walmart/wayfair/lowes），"
-         "新闻/博客/edu_gov 类型为 0 — 链接多样性弱且未经验证。"),
+        (f"仅约 {ext} 个 SERP 提及估算，集中在 {_top_types} 类（{bd_str}），"
+         f"{_gap_str} — 链接多样性弱且未经验证。"),
         ("用真实反链工具（Ahrefs/Moz/SEMrush）确认，再优先争取编辑/博客/edu 链接，"
-         "把 domain_type_breakdown 扩展到市场平台之外。"),
+         "把 domain_type_breakdown 扩展到现有类型之外。"),
         "OFFSITE-001", "backlink",
-        evidence=f"外部提及 {ext}；类型 {bd_str}（news 0/blog 0/edu_gov 0）。{disclaimer[:80]}"))
+        evidence=f"外部提及 {ext}；类型 {bd_str}；{_gap_str}。{disclaimer[:80]}"))
     # FINDING 2 — genuine outreach leads (namesakes already excluded)
     if unlinked:
         um_str = "；".join(f"{u.get('domain','')}（{_trunc(u.get('title',''),30)}）" for u in unlinked)
@@ -1073,7 +1140,10 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
     return {
         "icon": "🤖", "title_zh": "结构化数据与 AI 就绪度", "title_en": "Schema & AI Readiness",
         "score": max(0, min(100, score)),
-        "summary_html": (f"<p>检测到 {len(found_types)} 种 Schema 类型（{types_str}），综合评分 {comp}/100。</p>"
+        # Don't quote the probe's composite as a second score — it contradicts
+        # the module header score (header = composite minus finding deductions).
+        # The header is the single source of truth; describe state in words here.
+        "summary_html": (f"<p>检测到 {len(found_types)} 种 Schema 类型（{types_str}）。</p>"
                          f"<p>月均发布 {pv.get('avg_per_month_12m',0)} 页（基准 {velocity_basis} — 产品页更替非内容营销），"
                          f"博客枢纽缺失。</p>"),
         "data_table": {"headers": ["指标", "数值", "状态"], "rows": rows},
@@ -1497,7 +1567,7 @@ def _module_gsc(gsc: dict) -> dict:
         rows.append([f"  {i}.", _trunc(item, 60), "🔓 待解锁"])
 
     findings = [_finding(
-        "P1", "连接 GSC 解锁真实曝光/点击/排名/query 数据",
+        "INFO", "连接 GSC 解锁真实曝光/点击/排名/query 数据",
         ("当前报告基于公开抓取与第三方探针估算；连接 Google Search Console（只读 OAuth 授权）后，"
          "本模块将呈现来自 Google 的真实点击、曝光、每个查询的平均排名与 CTR、Top 落地页，"
          "以及 page-2 临门一脚关键词 — 这是任何外部探针都无法估算的一手数据。"),
@@ -1587,7 +1657,7 @@ def _module_roadmap(modules: list[dict], offsite: dict[str, dict]) -> dict:
 
     findings: list[dict] = [
         _finding(
-            "P1", "按月排序的 90 天 GEO 执行路线",
+            "INFO", "按月排序的 90 天 GEO 执行路线",
             (f"将本报告的 {len(p0)} 个 P0 与 {len(p1)} 个 P1 诊断综合为可执行的三阶段计划："
              "先修基础、再用 citation-bait 抢 AI 引用、最后建权威与实体 — "
              "顺序而非并行，避免在权威信号缺失时盲目产内容。"),
@@ -1796,8 +1866,8 @@ def _build_top_actions(modules: list[dict]) -> list[dict]:
     for mi, mod in enumerate(modules):
         for fi, f in enumerate(mod.get("findings", []) or []):
             sev = f.get("severity", "").upper()
-            if sev == "PASS":
-                continue
+            if sev in ("PASS", "INFO"):
+                continue  # non-defects never compete for a top-action slot
             ranked.append(((sev_order.get(sev, 8), _leverage(f), mi, fi), f))
     ranked.sort(key=lambda x: x[0])
 

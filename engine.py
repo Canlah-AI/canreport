@@ -272,6 +272,13 @@ def build_buyer_queries(industry_hint: str | None,
         english_product_hint, use_case_hint)
     geo = (geography or "").strip()
     suffix = f" {geo}" if geo else ""
+    # NOTE: short consumer-phrased "AIO-bait" queries were tried to coax Google
+    # into showing an AI-Overview, but (a) Google still doesn't surface AIO for
+    # this B2B category and (b) they surfaced an Answer-Box citation of a
+    # brand-ADJACENT domain (emdoorrugged.com) that the engine's loose brand
+    # match wrongly credited to the audited domain (emdoor.com), silently
+    # flipping the headline P0. Reverted until the citation detector matches the
+    # audited domain strictly (same fix family as the Perplexity in_sources gate).
     return [
         f"best {product} brands{suffix}",
         f"{product} reviews{suffix}",
@@ -301,10 +308,14 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
         industry_hint, product_hint, brand, geography,
         english_product_hint, use_case_hint)
     logger.info("ai_citation buyer queries: %s", queries)
-    report = asyncio.run(mod.run_citation_test(
+    import inspect
+    citation_kwargs = dict(
         target_url=url,
         brand_name=brand or "",
-        industry="dtc-ecommerce",
+        # Pass the detected industry through; fall back to the generic default
+        # only when classification produced nothing (avoids mislabeling a B2B
+        # brand as dtc-ecommerce in any downstream scoring/labeling).
+        industry=industry_hint or "dtc-ecommerce",
         geography=geography,
         region_code=region_code,
         queries=queries,
@@ -313,7 +324,22 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
         # BD SERP is the authoritative AI-Overview engine (gl=us); self-gates on
         # BRIGHTDATA_API_KEY in env, so this is a no-op when the key is absent.
         enable_brightdata=True,
-    ))
+    )
+    # Cross-repo version skew: older pinned engines (canmarket-site-audit-v1.1)
+    # predate the Bright Data passthrough and reject enable_brightdata. Drop any
+    # kwarg the resolved engine's run_citation_test signature doesn't accept
+    # rather than letting one unknown kwarg crash the whole AI-citation probe.
+    # If the engine accepts **kwargs, pass everything through unfiltered — the
+    # signature would expose only the var-keyword param and naive filtering would
+    # wrongly strip every real argument.
+    sig_params = inspect.signature(mod.run_citation_test).parameters
+    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig_params.values()):
+        dropped = [k for k in citation_kwargs if k not in sig_params]
+        if dropped:
+            logger.info("ai_citation: engine %s does not accept %s; dropping",
+                        engine_root, dropped)
+        citation_kwargs = {k: v for k, v in citation_kwargs.items() if k in sig_params}
+    report = asyncio.run(mod.run_citation_test(**citation_kwargs))
     return asdict(report)
 
 
@@ -351,6 +377,14 @@ def _load_probe_module(engine_root: Path, module_name: str):
     # via sys.modules[cls.__module__]; an unregistered path-loaded module makes
     # that return None and crash with "'NoneType' has no attribute '__dict__'".
     sys.modules[spec.name] = mod
+    # Put the engine's probes/ dir on sys.path so a path-loaded probe can import
+    # its own siblings (e.g. live_ai_search's `import _geo_serp`, the Bright Data
+    # AI-Overview source of truth). Without this the sibling import silently
+    # fails, _GEO_SERP_OK stays False, and the BD AI-Overview engine self-gates
+    # OFF even when BRIGHTDATA_API_KEY is set — 0 BD calls, AI-Overview missing.
+    probes_dir = str(probe_path.parent)
+    if probes_dir not in sys.path:
+        sys.path.insert(0, probes_dir)
     spec.loader.exec_module(mod)
     return mod
 

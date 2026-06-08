@@ -1,0 +1,25 @@
+<section id="exec" class="wk-exec">
+  <h2>执行摘要 <span class="wk-section-sub">Executive Summary</span></h2>
+
+  <div class="wk-exec-headline">{{ executive_summary.headline }}</div>
+
+  <div class="wk-callout-row">
+    {% for s in executive_summary.outcome_stats %}
+    <div class="wk-callout">
+      <div class="wk-callout-num">{{ s.value }}<span class="wk-callout-unit">{{ s.unit }}</span></div>
+      <div class="wk-callout-label">{{ s.label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <p class="wk-exec-narrative">{{ executive_summary.narrative }}</p>
+
+  <div class="wk-highlights">
+    <div class="wk-highlights-label">本周关键成果</div>
+    <ul class="wk-highlights-list">
+      {% for h in executive_summary.highlights %}
+      <li>{{ h }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>

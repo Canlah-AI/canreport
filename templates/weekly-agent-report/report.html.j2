@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<title>{{ brand_name }} — {{ report_title }} · {{ report_date }}</title>
+<style>
+  @page {
+    size: A4 portrait;
+    margin: 1.6cm 1.7cm 1.9cm 1.7cm;   /* > 0.5in on every edge */
+    @bottom-center {
+      content: "{{ department_name }}  ·  第 " counter(page) " / " counter(pages) " 页";
+      font-family: "Inter", "Noto Sans SC", sans-serif;
+      font-size: 8pt;
+      color: #94A3B8;
+    }
+    @top-right {
+      content: "{{ report_title }} · {{ week_label }}";
+      font-family: "Inter", "Noto Sans SC", sans-serif;
+      font-size: 8pt;
+      color: #CBD5E1;
+    }
+  }
+  @page :first { @top-right { content: ""; } @bottom-center { content: ""; } }
+
+  :root {
+    --blue: #2563EB;            /* Interactive Blue — the single accent */
+    --blue-dark: #1D4ED8;
+    --blue-50: #EFF4FF;
+    --blue-100: #DBE6FE;
+    --ink: #0F172A;             /* primary text */
+    --ink-2: #334155;           /* secondary text */
+    --ink-3: #64748B;           /* tertiary text */
+    --ink-4: #94A3B8;           /* faint */
+    --line: #E2E8F0;
+    --line-soft: #EEF2F7;
+    --surface: #FFFFFF;
+    --surface-alt: #F8FAFC;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+  }
+
+  html, body {
+    font-family: "Inter", "Noto Sans SC", system-ui, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.75;
+    color: var(--ink);
+    margin: 0; padding: 0;
+    background: var(--surface);
+  }
+  /* CJK should NOT be justified (creates uneven inter-character gaps); keep left. */
+  p, li { text-align: left; }
+  /* prevent broken CJK word-wrap / mid-word breaks */
+  p, li, td, th, div, span { word-break: keep-all; overflow-wrap: anywhere; line-break: strict; }
+
+  h2 {
+    font-size: 15pt; font-weight: 600; color: var(--ink);
+    line-height: 1.3;
+    padding-bottom: 0.3em;
+    border-bottom: 2px solid var(--blue);
+    margin: 1.8em 0 1em 0;
+  }
+  h3 { font-size: 11.5pt; font-weight: 600; color: var(--ink-2); margin: 1.1em 0 0.4em 0; }
+  strong { font-weight: 600; }
+  .wk-section-sub {
+    font-size: 9pt; color: var(--ink-4); font-weight: 400;
+    margin-left: 0.5em; letter-spacing: 0.06em;
+  }
+
+  /* ============ COVER ============ */
+  .wk-cover {
+    page-break-after: always;
+    display: flex; flex-direction: column;
+    min-height: 23.5cm; padding: 1.5cm 0 0 0;
+  }
+  .wk-cover-top { }
+  .wk-cover-kicker {
+    font-size: 11pt; font-weight: 600; color: var(--blue);
+    letter-spacing: 0.04em;
+  }
+  .wk-cover-accent {
+    width: 56px; height: 4px; background: var(--blue);
+    border-radius: 2px; margin-top: 0.6cm;
+  }
+  .wk-cover-mid { margin-top: 5.5cm; }
+  .wk-cover-title {
+    font-size: 30pt; font-weight: 700; color: var(--ink);
+    line-height: 1.2; letter-spacing: 0.01em;
+  }
+  .wk-cover-subtitle {
+    font-size: 13pt; font-weight: 400; color: var(--ink-3);
+    margin-top: 0.35cm; letter-spacing: 0.1em;
+  }
+  .wk-cover-week {
+    font-size: 11pt; color: var(--ink-2); margin-top: 0.9cm;
+    font-weight: 500;
+  }
+  .wk-cover-meta {
+    margin-top: auto; padding-top: 1.2cm;
+    border-top: 1px solid var(--line);
+  }
+  .wk-cover-meta-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 0.4em 0; font-size: 10pt;
+  }
+  .wk-cover-meta-label {
+    color: var(--ink-4); font-size: 9pt; letter-spacing: 0.06em;
+  }
+  .wk-cover-meta-val { color: var(--ink); font-weight: 500; }
+
+  /* ============ EXECUTIVE SUMMARY ============ */
+  .wk-exec-headline {
+    font-size: 14pt; font-weight: 600; color: var(--ink);
+    line-height: 1.55; margin: 0.4em 0 1em 0;
+    padding-left: 0.7em; border-left: 4px solid var(--blue);
+  }
+  .wk-callout-row { display: flex; gap: 0.8em; margin: 1.2em 0 1.4em 0; }
+  .wk-callout {
+    flex: 1; text-align: center; padding: 0.9em 0.6em;
+    background: var(--surface-alt); border-radius: var(--radius-md);
+    border: 1px solid var(--line-soft);
+  }
+  .wk-callout-num {
+    font-size: 27pt; font-weight: 700; line-height: 1.05; color: var(--blue);
+    font-variant-numeric: tabular-nums;
+  }
+  .wk-callout-unit { font-size: 11pt; font-weight: 500; color: var(--ink-4); margin-left: 0.1em; }
+  .wk-callout-label { font-size: 8.5pt; color: var(--ink-3); margin-top: 0.45em; }
+  .wk-exec-narrative { font-size: 10.5pt; color: var(--ink-2); margin: 0.6em 0 1.2em 0; }
+  .wk-highlights {
+    background: var(--blue-50); border-radius: var(--radius-md);
+    padding: 1em 1.3em; border: 1px solid var(--blue-100);
+  }
+  .wk-highlights-label {
+    font-size: 8.5pt; font-weight: 600; color: var(--blue-dark);
+    letter-spacing: 0.06em; margin-bottom: 0.4em;
+  }
+  .wk-highlights-list { margin: 0; padding-left: 1.2em; }
+  .wk-highlights-list li { margin: 0.35em 0; font-size: 10pt; color: var(--ink); }
+
+  /* ============ GROUP (department layer) ============ */
+  .wk-group { margin-top: 1.6em; page-break-inside: auto; }
+  .wk-group-header {
+    display: flex; align-items: baseline; gap: 0.7em;
+    border-bottom: 2px solid var(--blue); padding-bottom: 0.35em;
+    margin: 1.8em 0 0.3em 0;
+  }
+  .wk-group-name { font-size: 15pt; font-weight: 600; color: var(--ink); }
+  .wk-group-name-en { font-size: 9pt; color: var(--ink-4); letter-spacing: 0.06em; }
+  .wk-group-blurb { font-size: 9.5pt; color: var(--ink-3); margin: 0.5em 0 1em 0; }
+
+  /* ============ AGENT CARD ============ */
+  .wk-agent {
+    border: 1px solid var(--line); border-radius: var(--radius-md);
+    padding: 0.95em 1.15em; margin: 0.7em 0;
+    background: var(--surface); page-break-inside: avoid;
+  }
+  .wk-agent-head {
+    display: flex; align-items: baseline; gap: 0.55em; flex-wrap: wrap;
+    padding-bottom: 0.55em; border-bottom: 1px solid var(--line-soft);
+  }
+  .wk-agent-name { font-size: 12pt; font-weight: 700; color: var(--ink); }
+  .wk-agent-role {
+    font-size: 9pt; color: var(--blue-dark); font-weight: 500;
+    background: var(--blue-50); padding: 0.1em 0.55em; border-radius: 999px;
+  }
+  .wk-agent-role-en { font-size: 8pt; color: var(--ink-4); letter-spacing: 0.04em; }
+  .wk-agent-summary {
+    margin-left: auto; font-size: 9pt; color: var(--ink-3);
+    text-align: right; max-width: 9.5cm;
+  }
+  .wk-events { margin: 0.6em 0 0 0; padding: 0; list-style: none; }
+  .wk-event {
+    display: flex; align-items: flex-start; gap: 0.6em;
+    padding: 0.4em 0; font-size: 10pt; color: var(--ink-2);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .wk-event:last-child { border-bottom: 0; }
+  .wk-event-tag {
+    flex-shrink: 0; margin-top: 0.15em;
+    font-size: 7.5pt; font-weight: 700; letter-spacing: 0.03em;
+    padding: 0.15em 0.5em; border-radius: 4px; white-space: nowrap;
+  }
+  .tag-win { background: var(--blue); color: #fff; }
+  .tag-info { background: var(--surface-alt); color: var(--ink-3); border: 1px solid var(--line); }
+  .wk-event-text { flex: 1; }
+
+  /* ============ COLLABORATION ============ */
+  .wk-collab { margin: 1em 0; }
+  .wk-collab-item {
+    display: flex; align-items: flex-start; gap: 0.6em;
+    padding: 0.55em 0.9em; margin: 0.45em 0;
+    background: var(--surface-alt); border-radius: var(--radius-sm);
+    border-left: 3px solid var(--blue); font-size: 10pt; color: var(--ink-2);
+    page-break-inside: avoid;
+  }
+  .wk-collab-arrow { flex-shrink: 0; color: var(--blue); font-weight: 700; }
+
+  /* ============ NEXT WEEK ============ */
+  .wk-next { margin-top: 1em; }
+  .wk-next-intro { font-size: 10.5pt; color: var(--ink-2); margin-bottom: 0.9em; }
+  .wk-next-item {
+    display: flex; gap: 0.9em; align-items: flex-start;
+    padding: 0.7em 0; border-bottom: 1px solid var(--line-soft);
+    page-break-inside: avoid;
+  }
+  .wk-next-owner {
+    flex-shrink: 0; width: 4.6cm; font-size: 9pt; font-weight: 600;
+    color: var(--blue-dark);
+  }
+  .wk-next-text { flex: 1; font-size: 10pt; color: var(--ink-2); }
+
+  /* ============ SIGN-OFF ============ */
+  .wk-signoff {
+    margin-top: 2em; page-break-inside: avoid;
+    border: 1px solid var(--line); border-radius: var(--radius-lg);
+    padding: 1.3em 1.5em; background: var(--surface-alt);
+  }
+  .wk-signoff-statement { font-size: 10.5pt; color: var(--ink-2); line-height: 1.7; }
+  .wk-signoff-line {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    margin-top: 1.2em; padding-top: 1em; border-top: 1px solid var(--line);
+  }
+  .wk-signoff-by { font-size: 9pt; color: var(--ink-4); letter-spacing: 0.06em; }
+  .wk-signoff-name { font-size: 14pt; font-weight: 700; color: var(--ink); margin-top: 0.1em; }
+  .wk-signoff-role { font-size: 10pt; color: var(--blue-dark); font-weight: 500; }
+  .wk-signoff-date { font-size: 9pt; color: var(--ink-3); }
+
+  .wk-footer {
+    margin-top: 1.6em; text-align: center;
+    font-size: 8pt; color: var(--ink-4);
+  }
+  .wk-footer-dot {
+    display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--blue); margin-bottom: 0.6em;
+  }
+  .page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+{% include "cover.html" %}
+
+{# ==== Executive Summary (the 20%, at top) ==== #}
+{% include "executive.html" %}
+
+{# ==== Machine-compiled outcome events, grouped by department layer (the 80%) ==== #}
+{% for g in groups %}
+<section class="wk-group">
+  <div class="wk-group-header">
+    <span class="wk-group-name">{{ g.name }}</span>
+    <span class="wk-group-name-en">{{ g.name_en }}</span>
+  </div>
+  <div class="wk-group-blurb">{{ g.blurb }}</div>
+
+  {% for a in g.agents %}
+  <article class="wk-agent">
+    <header class="wk-agent-head">
+      <span class="wk-agent-name">{{ a.name }}</span>
+      <span class="wk-agent-role">{{ a.role }}</span>
+      <span class="wk-agent-role-en">{{ a.role_en }}</span>
+      <span class="wk-agent-summary">{{ a.summary }}</span>
+    </header>
+    <ul class="wk-events">
+      {% for e in a.events %}
+      <li class="wk-event">
+        <span class="wk-event-tag {% if e.type == 'win' %}tag-win{% else %}tag-info{% endif %}">{% if e.type == 'win' %}成果{% else %}动态{% endif %}</span>
+        <span class="wk-event-text">{{ e.text }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </article>
+  {% endfor %}
+</section>
+{% endfor %}
+
+{# ==== Cross-agent collaboration ==== #}
+{% if collaboration %}
+<section class="wk-collab">
+  <h2>协同链路 <span class="wk-section-sub">How the agents worked together</span></h2>
+  {% for c in collaboration %}
+  <div class="wk-collab-item">
+    <span class="wk-collab-arrow">·</span>
+    <span>{{ c }}</span>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# ==== Next week ==== #}
+{% if next_week %}
+<section class="wk-next">
+  <h2>下周计划 <span class="wk-section-sub">What's Next</span></h2>
+  <p class="wk-next-intro">{{ next_week.intro }}</p>
+  {% for item in next_week.tasks %}
+  <div class="wk-next-item">
+    <div class="wk-next-owner">{{ item.owner }}</div>
+    <div class="wk-next-text">{{ item.text }}</div>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# ==== Signed sign-off (name + role only, no persona prose) ==== #}
+<section class="wk-signoff">
+  <div class="wk-signoff-statement">{{ signoff.statement }}</div>
+  <div class="wk-signoff-line">
+    <div>
+      <div class="wk-signoff-by">编制与署名</div>
+      <div class="wk-signoff-name">{{ signoff.name }}</div>
+      <div class="wk-signoff-role">{{ signoff.role }}</div>
+    </div>
+    <div class="wk-signoff-date">{{ signoff.date }}</div>
+  </div>
+</section>
+
+<div class="wk-footer">
+  <div><span class="wk-footer-dot"></span></div>
+  由 {{ department_name }} 自动汇编 · Powered by Canlah AI
+</div>
+
+</body>
+</html>

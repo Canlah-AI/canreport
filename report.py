@@ -255,6 +255,12 @@ def main() -> int:
         if html_path is None:
             src_html.unlink(missing_ok=True)  # was only a scratch file for PDF
 
+    # Core probes whose silent failure makes the whole report misleading (the
+    # GEO money-shot). If one errors, we fail LOUD + exit non-zero instead of
+    # shipping a complete-looking report that quietly dropped its core module.
+    CORE_PROBES = {"ai_citation"}
+    core_degraded = False
+
     print(f"\n{'=' * 60}")
     print(f"  AUDIT COMPLETE — {brand}  (template: {args.template})")
     print(f"{'=' * 60}")
@@ -291,15 +297,26 @@ def main() -> int:
             print(f"  Failed/skipped:")
             for p in failed:
                 print(f"    - {p['probe']:<20} {p['status']}")
+        core_degraded = any(p["probe"] in CORE_PROBES and p["status"] == "error"
+                            for p in per_probe)
         print(f"  Trace JSON:  {out_dir / '_source' / (stem + '-trace.json')}")
         print(f"  Ledger:      {BASE_DIR / 'output' / '_runs.jsonl'}")
         print(f"{'=' * 60}")
+
+    if core_degraded:
+        print(f"\n{'!' * 60}")
+        print(f"  ⚠️  DEGRADED REPORT — a CORE probe errored "
+              f"({', '.join(sorted(CORE_PROBES))}).")
+        print(f"  The AI-citation module is the GEO money-shot; its absence "
+              f"makes this report MISLEADING. Do NOT send to a client.")
+        print(f"  Re-run after fixing the probe. Exiting non-zero.")
+        print(f"{'!' * 60}")
 
     if args.open:
         import subprocess
         target = pdf_path or html_path or json_path
         subprocess.run(["open", str(target)])
-    return 0
+    return 2 if core_degraded else 0
 
 
 if __name__ == "__main__":

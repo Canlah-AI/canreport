@@ -1,0 +1,31 @@
+<section class="wk-cover">
+  <div class="wk-cover-top">
+    <div class="wk-cover-kicker">{{ department_name }}</div>
+    <div class="wk-cover-accent"></div>
+  </div>
+
+  <div class="wk-cover-mid">
+    <div class="wk-cover-title">{{ report_title }}</div>
+    <div class="wk-cover-subtitle">{{ report_subtitle }}</div>
+    <div class="wk-cover-week">{{ week_label }} · {{ week_range }}</div>
+  </div>
+
+  <div class="wk-cover-meta">
+    <div class="wk-cover-meta-row">
+      <span class="wk-cover-meta-label">品牌</span>
+      <span class="wk-cover-meta-val">{{ brand_name }}</span>
+    </div>
+    <div class="wk-cover-meta-row">
+      <span class="wk-cover-meta-label">覆盖团队</span>
+      <span class="wk-cover-meta-val">{{ agent_count }} 位 Agent · 决策中枢 / 公域 / 私域</span>
+    </div>
+    <div class="wk-cover-meta-row">
+      <span class="wk-cover-meta-label">报告日期</span>
+      <span class="wk-cover-meta-val">{{ report_date }}</span>
+    </div>
+    <div class="wk-cover-meta-row">
+      <span class="wk-cover-meta-label">编制</span>
+      <span class="wk-cover-meta-val">{{ signoff.name }} · {{ signoff.role }}</span>
+    </div>
+  </div>
+</section>
