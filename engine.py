@@ -250,8 +250,19 @@ def build_buyer_queries(industry_hint: str | None,
                         brand: str | None,
                         geography: str = "United States",
                         english_product_hint: str | None = None,
-                        use_case_hint: str | None = None) -> list[str]:
-    """Build exactly 5 buyer-intent queries spanning 4 intent types.
+                        use_case_hint: str | None = None,
+                        categories: list[str] | None = None) -> list[str]:
+    """Build buyer-intent queries.
+
+    When ``categories`` (the brand's distinct segments from the deep
+    business-understanding pass, e.g. ['rugged tablets', 'AR smart glasses',
+    'VR headsets']) is given, SPAN them — one discovery query per segment plus
+    a couple of intent variants on the primary — so the AI-citation test
+    reflects EVERY business line, not just the most prominent one. A
+    multi-segment maker can be cited in one segment and invisible in another;
+    testing only the primary hides that.
+
+    Otherwise fall back to the 5 single-product intent templates below.
 
     Templates (brand-agnostic). A blank ``geography`` yields broad-market
     queries (no geo suffix), which is correct for multi-region targets like
@@ -272,6 +283,21 @@ def build_buyer_queries(industry_hint: str | None,
         english_product_hint, use_case_hint)
     geo = (geography or "").strip()
     suffix = f" {geo}" if geo else ""
+
+    # Multi-segment span (preferred when the business-understanding pass found
+    # distinct categories): one discovery query per segment + 2 intent variants
+    # on the primary, deduped and capped.
+    cats = [c.strip() for c in (categories or []) if c and c.strip()]
+    if cats:
+        primary = cats[0]
+        qs = [f"best {c} brands{suffix}" for c in cats[:4]]
+        qs += [f"{primary} reviews{suffix}", f"{primary} comparison"]
+        out: list[str] = []
+        for q in qs:
+            if q not in out:
+                out.append(q)
+        return out[:7]
+
     # NOTE: short consumer-phrased "AIO-bait" queries were tried to coax Google
     # into showing an AI-Overview, but (a) Google still doesn't surface AIO for
     # this B2B category and (b) they surfaced an Answer-Box citation of a
@@ -294,11 +320,14 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
                     geography: str = "United States",
                     region_code: str = "us",
                     english_product_hint: str | None = None,
-                    use_case_hint: str | None = None) -> dict:
+                    use_case_hint: str | None = None,
+                    categories: list[str] | None = None) -> dict:
     """Run live_ai_search with EXPLICIT brand-relevant buyer-intent queries.
 
     Bypasses the generic template system (the `queries=` param overrides it
-    entirely — see live_ai_search.run_citation_test line 469).
+    entirely — see live_ai_search.run_citation_test line 469). When
+    ``categories`` is given (the brand's segments from the business-understanding
+    pass), the queries span every segment.
     """
     import asyncio
     from dataclasses import asdict
@@ -306,7 +335,7 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
     mod = _load_probe_module(engine_root, "live_ai_search")
     queries = build_buyer_queries(
         industry_hint, product_hint, brand, geography,
-        english_product_hint, use_case_hint)
+        english_product_hint, use_case_hint, categories=categories)
     logger.info("ai_citation buyer queries: %s", queries)
     import inspect
     citation_kwargs = dict(
@@ -402,7 +431,8 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
              geography: str = "United States",
              region_code: str = "us",
              english_product_hint: str | None = None,
-             use_case_hint: str | None = None) -> tuple[str, dict, float]:
+             use_case_hint: str | None = None,
+             categories: list[str] | None = None) -> tuple[str, dict, float]:
     """Run one probe; return (key, output, duration_s). Never raises."""
     t0 = time.monotonic()
     try:
@@ -413,7 +443,7 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
                 industry_hint=industry_hint, product_hint=product_hint,
                 geography=geography, region_code=region_code,
                 english_product_hint=english_product_hint,
-                use_case_hint=use_case_hint)
+                use_case_hint=use_case_hint, categories=categories)
             return key, output, time.monotonic() - t0
         mod = _load_probe_module(engine_root, module_name)
         fn = getattr(mod, fn_name)
@@ -562,7 +592,8 @@ def run_offsite_probes(url: str, brand: str | None = None,
                        geography: str = "United States",
                        region_code: str = "us",
                        english_product_hint: str | None = None,
-                       use_case_hint: str | None = None) -> dict[str, dict]:
+                       use_case_hint: str | None = None,
+                       categories: list[str] | None = None) -> dict[str, dict]:
     """Run all off-site probes and return {key: probe_output}.
 
     Concurrency is capped at 3 (not 9) on purpose: each probe fires 4-6 Serper
@@ -608,7 +639,7 @@ def run_offsite_probes(url: str, brand: str | None = None,
         futures = [
             pool.submit(_run_one, engine_root, key, mod, fn, nb, url, brand,
                         industry_hint, product_hint, geography, region_code,
-                        english_product_hint, use_case_hint)
+                        english_product_hint, use_case_hint, categories)
             for (key, mod, fn, nb) in OFFSITE_PROBES
         ]
         for fut in as_completed(futures):

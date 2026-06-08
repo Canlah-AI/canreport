@@ -623,6 +623,7 @@
   </h2>
   <ol class="toc-list">
     <li class="toc-item"><a href="#exec">执行摘要</a></li>
+    {% if business_profile %}<li class="toc-item"><a href="#business">品牌业务理解</a></li>{% endif %}
     {% for mod in modules %}
     <li class="toc-item"><a href="#mod-{{ loop.index }}">{{ mod.title_zh }}</a></li>
     {% endfor %}
@@ -657,6 +658,36 @@
 
 {# ==== Executive Summary ==== #}
 {% include "executive.html" %}
+
+{# ==== Business Understanding (read of the actual site, drives everything) ==== #}
+{% if business_profile %}
+<section id="business" style="margin:1.5em 0; padding:1.1em 1.3em; border:1px solid var(--g-border,#dadce0); border-radius:10px; background:var(--surface,#fff); box-shadow:var(--shadow-sm); page-break-inside:avoid;">
+  <h2 style="margin:0 0 0.5em; font-size:14pt; font-weight:600;">品牌业务理解
+    <span style="font-size:9.5pt; color:var(--text-tertiary,#80868b); font-weight:400; letter-spacing:0.04em;">What You Actually Do</span></h2>
+  <p style="font-size:10.5pt; line-height:1.7; margin:0 0 0.9em;">{{ business_profile.summary_zh }}</p>
+
+  {% if business_profile.segments %}
+  <div style="font-size:8.5pt; letter-spacing:0.06em; text-transform:uppercase; color:var(--text-secondary,#5f6368); font-weight:600; margin-bottom:0.3em;">业务板块 Business Segments</div>
+  <div style="margin-bottom:0.9em;">
+    {% for s in business_profile.segments %}<span style="display:inline-block; font-size:9pt; padding:0.2em 0.6em; margin:0 0.3em 0.3em 0; border-radius:12px; background:var(--g-blue-50,#e8f0fe); color:var(--g-blue-dark,#1967d2);">{{ s }}</span>{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if business_profile.canonical_categories %}
+  <div style="font-size:8.5pt; letter-spacing:0.06em; text-transform:uppercase; color:var(--text-secondary,#5f6368); font-weight:600; margin-bottom:0.3em;">AI 买家会搜的品类 Search Categories</div>
+  <div style="margin-bottom:0.9em;">
+    {% for c in business_profile.canonical_categories %}<span style="display:inline-block; font-size:9pt; padding:0.2em 0.6em; margin:0 0.3em 0.3em 0; border-radius:12px; background:var(--g-green-light,#e6f4ea); color:#1b7d2c;">{{ c }}</span>{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if business_profile.target_buyers %}<p style="font-size:9.5pt; line-height:1.6; margin:0.3em 0;"><strong>目标客户：</strong>{{ business_profile.target_buyers }}</p>{% endif %}
+  {% if business_profile.positioning %}<p style="font-size:9.5pt; line-height:1.6; margin:0.3em 0;"><strong>定位：</strong>{{ business_profile.positioning }}</p>{% endif %}
+
+  <div style="margin-top:0.9em; padding:0.7em 0.9em; border-left:3px solid var(--g-blue,#1a73e8); background:rgba(26,115,232,0.05); font-size:9.5pt; line-height:1.6;">
+    本报告的 AI 引用测试横跨上述 <strong>{{ business_profile.canonical_categories|length }}</strong> 个核心品类（共 <strong>{{ business_profile.segments|length }}</strong> 个业务板块），综合自对官网 <strong>{{ business_profile._pages_read }}</strong> 页的深度阅读 —— 不只看首页一句话。
+  </div>
+</section>
+{% endif %}
 
 {# ==== Module Sections ==== #}
 {% for mod in modules %}

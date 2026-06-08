@@ -34,6 +34,7 @@ from jinja2 import Environment, FileSystemLoader
 import contract as contract_mod
 import engine as engine_mod
 from eac_audit import run_audit
+from probes.understand_business import understand_business
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("report")
@@ -167,6 +168,22 @@ def main() -> int:
         url=url, form_url=args.form_url, thank_you_url=args.thank_you_url,
         product_page=args.product_page, company=brand, markets=args.market)
 
+    # 1.5 Deep business understanding — read multiple pages to learn what the
+    # company ACTUALLY does (ALL segments), BEFORE auditing. Drives clean,
+    # segment-spanning AI-citation categories + a "what you do" report section.
+    # Best-effort: a failure here never blocks the audit.
+    logger.info("deep business-understanding read for %s", url)
+    try:
+        business_profile = understand_business(url)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("business understanding failed: %s", e)
+        business_profile = None
+    if business_profile:
+        logger.info("business: %d pages read, segments=%s, categories=%s",
+                    business_profile.get("_pages_read", 0),
+                    business_profile.get("segments"),
+                    business_profile.get("canonical_categories"))
+
     # 2. Off-site probes (3 extra modules) via the engine
     if args.no_offsite:
         logger.info("off-site probes skipped (--no-offsite)")
@@ -180,13 +197,18 @@ def main() -> int:
         geography, region_code = _derive_geography(args.market)
         logger.info("AI-citation geography=%s region_code=%s (from market=%s)",
                     geography, region_code, args.market)
+        # Prefer the deep business-understanding profile (all segments) over the
+        # shallow homepage one-shot for the AI-citation query category.
+        bp = business_profile or {}
         offsite = engine_mod.run_offsite_probes(
             url, brand,
             industry_hint=detected.get("industry"),
             product_hint=detected.get("product"),
             geography=geography, region_code=region_code,
-            english_product_hint=detected.get("english_product"),
-            use_case_hint=detected.get("use_case"))
+            english_product_hint=(bp.get("primary_category")
+                                  or detected.get("english_product")),
+            use_case_hint=detected.get("use_case"),
+            categories=bp.get("canonical_categories"))
         # Pop the run-trace out of the probe results before building the contract
         # so it never leaks into a rendered module; we attach it under
         # data["_run_trace"] (a reserved, non-rendered key) ourselves.
@@ -198,6 +220,11 @@ def main() -> int:
         if run_trace is not None:
             run_trace["generated_at"] = datetime.now(timezone.utc).isoformat()
             data["_run_trace"] = run_trace
+
+    # Attach the business-understanding profile so the template can open with a
+    # "what this company actually does" section.
+    if business_profile:
+        data["business_profile"] = business_profile
 
     # 3. Render via selected template
     logger.info("rendering with template '%s'", args.template)
