@@ -176,7 +176,9 @@ def run_audit(
         else:
             speed_table["rows"].append(["CDN", "未检测到", "—", "❌ 缺失"])
 
-        country = speed_data.get("server_country", "未知")
+        # server_country is explicitly None when geolocation fails, so a .get
+        # default won't catch it — coerce None/empty to a placeholder, never "None".
+        country = speed_data.get("server_country") or "未检测到"
         speed_table["rows"].append(["服务器位置", country, "—", "—"])
 
     speed_summary = ""

@@ -1774,6 +1774,15 @@ def build_contract(base: dict, offsite: dict[str, dict],
     data = dict(base)  # shallow copy of the base report_data
     all_modules = list(base.get("modules", [])) + offsite_modules
 
+    # Display hygiene: never render a literal None/"None"/empty in a client-facing
+    # metric table — coerce to an em-dash placeholder across EVERY module's
+    # data_table (covers all modules, not per-field).
+    for _m in all_modules:
+        for _row in (_m.get("data_table", {}) or {}).get("rows", []) or []:
+            for _i, _cell in enumerate(_row):
+                if _cell is None or (isinstance(_cell, str) and _cell.strip() in ("", "None")):
+                    _row[_i] = "—"
+
     # Self-verification / cross-check pass: audit high-risk NEGATIVE findings
     # (absence claims) against INDEPENDENT probe signals. Runs AFTER all modules
     # are built but BEFORE roadmap synthesis, score recalculation, and
