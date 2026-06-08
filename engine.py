@@ -458,7 +458,12 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
         if key in _INDUSTRY_KEYWORD_PROBES:
             industry_keywords = derive_industry_keywords(industry_hint, product_hint)
             logger.info("%s industry_keywords: %s", key, industry_keywords)
-            result = fn(url, brand, industry_keywords)
+            if key == "news":
+                # news_coverage_scan tiers outlets industry-aware (no hardcoded
+                # outlet table) — pass the detected industry through.
+                result = fn(url, brand, industry_keywords, industry=industry_hint or "")
+            else:
+                result = fn(url, brand, industry_keywords)
         elif needs_brand:
             result = fn(url, brand)
         else:

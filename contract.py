@@ -96,10 +96,11 @@ _CATEGORY_FRIENDLY = {
 }
 
 # Telco/healthcare/banking domains that signal a STALE generic-query run.
-_STALE_GARBAGE_DOMAINS = {
-    "hardwarezone.com.sg", "circles.life", "sma.org.sg", "singtel.com",
-    "starhub.com", "moneysmart.sg",
-}
+# (Removed _STALE_GARBAGE_DOMAINS — a Singapore-specific hardcoded blacklist
+# that detected the old "generic Singapore query" failure mode. The
+# business-understanding pass now drives brand-relevant category queries, so the
+# failure mode no longer occurs and the region-specific list breaks
+# generalization to non-SG brands.)
 
 # Engines whose results carry a real generative AI answer (verbatim excerpt).
 _EVIDENCE_GENERATIVE_ENGINES = {"gemini_search", "openai_chatgpt"}
@@ -504,11 +505,8 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     # TABLE B — top competitors cited instead (the money shot)
     table_b_rows = [["── 反被 AI 推荐的竞品 ──", "", "", "", ""]]
     table_b_rows.append(["排名 #", "竞品域名 Competitor", "被 AI 引用次数", "出现引擎", ""])
-    stale_detected = False
     for i, c in enumerate(top_comp[:5], 1):
         dom = c.get("domain", "")
-        if dom in _STALE_GARBAGE_DOMAINS:
-            stale_detected = True
         engines = " · ".join(sorted(comp_engines.get(dom, []))) or "—"
         table_b_rows.append([str(i), dom, str(c.get("appearances", 0)), engines, ""])
 
@@ -551,16 +549,6 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
         ])
 
     findings: list[dict] = []
-
-    # BUILD-BLOCKER: stale data
-    if stale_detected:
-        findings.append(_finding(
-            "P1", "AI 引用数据疑似过期（通用查询）",
-            "竞品列表包含电信/医疗等无关域名，说明 live_ai_search 仍在跑通用 Singapore 查询而非品牌相关买家查询 — 渲染前必须重跑。",
-            "清空 ~/.cache/live_ai_search/ 并以品牌相关买家查询重跑 ai_citation 探针。",
-            "AICITE-000", "live_ai_search",
-            evidence=f"检测到过期竞品: {', '.join(c.get('domain','') for c in top_comp[:3])}",
-            confidence=0.6))
 
     # Friendly names of the engines we ACTUALLY tested — used in the P0 text so
     # we never overclaim coverage (e.g. naming ChatGPT when it was never run).
