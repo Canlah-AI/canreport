@@ -112,6 +112,9 @@ BROWSER_AI_TIMEOUT_SEC = int(os.environ.get("BROWSER_AI_TIMEOUT_SEC", "120"))
 OFFSITE_PROBES: list[tuple[str, str, str, bool]] = [
     ("ai_citation", "live_ai_search", "probe", True),
     ("reputation", "reviews_scan", "probe", True),
+    # entity integrity (Wikidata Q-ID + Wikipedia article) — free public APIs,
+    # pure HTTP, pool-safe. A top 2026 AI-citation signal.
+    ("entity", "wikidata_entity_scan", "probe", True),
     ("backlink", "backlink_scan", "probe", True),
     ("community", "community_mention_scan", "probe", True),
     ("news", "news_coverage_scan", "probe", True),
@@ -353,6 +356,9 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
         # BD SERP is the authoritative AI-Overview engine (gl=us); self-gates on
         # BRIGHTDATA_API_KEY in env, so this is a no-op when the key is absent.
         enable_brightdata=True,
+        # ChatGPT (Responses API + web_search) — self-gates on OPENAI_API_KEY in
+        # env, so this is a no-op (stays in backlog) when the key is absent.
+        enable_chatgpt=True,
     )
     # Cross-repo version skew: older pinned engines (canmarket-site-audit-v1.1)
     # predate the Bright Data passthrough and reject enable_brightdata. Drop any

@@ -1694,6 +1694,39 @@ def _module_roadmap(modules: list[dict], offsite: dict[str, dict]) -> dict:
 # Contract builder
 # ---------------------------------------------------------------------------
 
+def _module_entity(entity: dict) -> dict:
+    """Entity readiness — Wikidata item + Wikipedia article (top AI-citation signal)."""
+    wd = entity.get("wikidata", {}) or {}
+    wp = entity.get("wikipedia", {}) or {}
+    grade = entity.get("grade", "ABSENT")
+    findings = entity.get("findings", []) or []
+    qid = wd.get("qid")
+    conf = wd.get("match_confidence", "none")
+    rows = [
+        ["Wikidata 条目", (f"{qid}（{wd.get('label','')}）" if qid else "无"),
+         "✅ 已验证" if conf == "verified" else ("⚠️ 疑同名" if conf == "name-only" else "❌ 缺失")],
+        ["官网关联 (P856)", "已指向官网" if wd.get("website_matches_audited") else "未关联",
+         "✅" if wd.get("website_matches_audited") else "❌ 缺口"],
+        ["声明数 (statements)", str(wd.get("statement_count", 0)), "—"],
+        ["Wikipedia 文章", (wp.get("title") if wp.get("present") else "无") or "无",
+         "✅ 存在" if wp.get("present") else "❌ 缺失"],
+    ]
+    score = {"STRONG": 90, "PARTIAL": 55, "ABSENT": 20}.get(grade, 40)
+    summary = (
+        f"<p>实体就绪度 <strong>{grade}</strong>。Wikidata "
+        f"{('条目 ' + qid) if qid else '无条目'}，Wikipedia "
+        f"{'有文章' if wp.get('present') else '无文章'}。</p>"
+        f"<p>Wikidata Q-ID + Wikipedia 文章是 2026 年 AI 引用与 Google 知识面板的核心实体信号 "
+        f"— Wikipedia 是 AI 回答最高频引用源之一。</p>")
+    return {
+        "icon": "🧬", "title_zh": "实体就绪度 (Wikidata / Wikipedia)",
+        "title_en": "Entity Readiness — Wikidata & Wikipedia",
+        "score": score, "summary_html": summary,
+        "data_table": {"headers": ["指标", "数值", "状态"], "rows": rows},
+        "findings": findings,
+    }
+
+
 def _is_owned_domain(value: Any, owned: set[str]) -> bool:
     """True if value's host is (a subdomain of) one of the brand's OWN domains."""
     d = str(value or "").strip().lower()
@@ -1758,6 +1791,7 @@ def build_contract(base: dict, offsite: dict[str, dict],
             offsite.get("ai_citation", {}), brand_name=base.get("company", ""),
             perplexity_browser=offsite.get("perplexity_browser", {})),
         _module_reputation(offsite.get("reputation", {})),
+        _module_entity(offsite.get("entity", {})),
         _module_backlinks_news(offsite.get("backlink", {}), offsite.get("news", {})),
         _module_community_presence(offsite.get("community", {})),
         # Technical/on-site SEO crawl + query universe sit near the schema/tech
