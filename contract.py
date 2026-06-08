@@ -1694,8 +1694,65 @@ def _module_roadmap(modules: list[dict], offsite: dict[str, dict]) -> dict:
 # Contract builder
 # ---------------------------------------------------------------------------
 
-def build_contract(base: dict, offsite: dict[str, dict]) -> dict:
-    """Merge base on-site audit + off-site probes into one report contract."""
+def _is_owned_domain(value: Any, owned: set[str]) -> bool:
+    """True if value's host is (a subdomain of) one of the brand's OWN domains."""
+    d = str(value or "").strip().lower()
+    d = re.sub(r"^https?://", "", d).split("/")[0].lstrip(".")
+    if d.startswith("www."):
+        d = d[4:]
+    return any(d == o or d.endswith("." + o) for o in owned)
+
+
+def _strip_owned_domains(offsite: dict[str, dict], owned_domains) -> None:
+    """Remove the brand's OWN alternate/regional domains (e.g. a manufacturer's
+    overseas / .cn / sister-brand sites) from competitor tallies, external-mention
+    counts, and citation sources — so they're never miscounted as rivals or as
+    third-party signals. Mutates offsite in place. No-op when no owned domains."""
+    owned = {str(o).strip().lower().lstrip(".") for o in (owned_domains or []) if str(o).strip()}
+    owned = {o[4:] if o.startswith("www.") else o for o in owned}
+    if not owned:
+        return
+    ai = offsite.get("ai_citation") or {}
+    st = ai.get("summary_stats") or {}
+    tc = st.get("top_competitors_cited")
+    if isinstance(tc, list):
+        st["top_competitors_cited"] = [c for c in tc
+                                       if not _is_owned_domain(c.get("domain"), owned)]
+    for r in ai.get("results", []) or []:
+        if isinstance(r, dict) and isinstance(r.get("competitors_cited"), list):
+            r["competitors_cited"] = [c for c in r["competitors_cited"]
+                                      if not _is_owned_domain(c, owned)]
+    pb = offsite.get("perplexity_browser") or {}
+    for r in pb.get("results", []) or []:
+        if not isinstance(r, dict):
+            continue
+        for k in ("competitors", "competitors_cited"):
+            if isinstance(r.get(k), list):
+                r[k] = [c for c in r[k] if not _is_owned_domain(c, owned)]
+        if isinstance(r.get("sources"), list):
+            r["sources"] = [s for s in r["sources"]
+                            if not (isinstance(s, dict) and _is_owned_domain(s.get("url"), owned))]
+    bl = offsite.get("backlink") or {}
+    ms = bl.get("mention_sources")
+    if isinstance(ms, list):
+        dropped = sum(1 for m in ms if _is_owned_domain(m.get("domain"), owned))
+        bl["mention_sources"] = [m for m in ms if not _is_owned_domain(m.get("domain"), owned)]
+        est = bl.get("external_mentions_estimate")
+        if dropped and isinstance(est, int):
+            bl["external_mentions_estimate"] = max(0, est - dropped)
+    ul = bl.get("unlinked_mentions")
+    if isinstance(ul, list):
+        bl["unlinked_mentions"] = [m for m in ul if not _is_owned_domain(m.get("domain"), owned)]
+
+
+def build_contract(base: dict, offsite: dict[str, dict],
+                   owned_domains=None) -> dict:
+    """Merge base on-site audit + off-site probes into one report contract.
+
+    owned_domains: the brand's own alternate/regional domains to exclude from
+    competitor/mention/citation counting (they are not rivals or third parties).
+    """
+    _strip_owned_domains(offsite, owned_domains)
     offsite_modules = [
         _module_ai_citation(
             offsite.get("ai_citation", {}), brand_name=base.get("company", ""),

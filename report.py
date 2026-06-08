@@ -138,6 +138,10 @@ def main() -> int:
     parser.add_argument("--form-url", help="Lead form page URL (on-site form probe)")
     parser.add_argument("--thank-you-url", help="Thank-you page URL (conversion tracking)")
     parser.add_argument("--product-page", help="Product detail page URL (trust probe)")
+    parser.add_argument("--owned-domains", default="",
+                        help="Comma-separated brand-owned alt/regional domains to "
+                             "exclude from competitor/mention/citation counting "
+                             "(e.g. acme.cn,acme-global.com)")
     parser.add_argument("--no-offsite", action="store_true", help="Skip off-site probes")
     parser.add_argument("--output-dir", help="Output dir (default: output/{domain})")
     parser.add_argument("--open", action="store_true", help="Open the report after generation")
@@ -187,7 +191,10 @@ def main() -> int:
         # so it never leaks into a rendered module; we attach it under
         # data["_run_trace"] (a reserved, non-rendered key) ourselves.
         run_trace = offsite.pop("_run_trace", None)
-        data = contract_mod.build_contract(base, offsite)
+        owned = [d.strip() for d in (args.owned_domains or "").split(",") if d.strip()]
+        if owned:
+            logger.info("excluding brand-owned domains from counting: %s", owned)
+        data = contract_mod.build_contract(base, offsite, owned_domains=owned)
         if run_trace is not None:
             run_trace["generated_at"] = datetime.now(timezone.utc).isoformat()
             data["_run_trace"] = run_trace
