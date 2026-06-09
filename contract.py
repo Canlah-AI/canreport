@@ -347,7 +347,15 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     sentiment = stats.get("overall_sentiment", "n/a (not mentioned)")
     sent_break = stats.get("sentiment_breakdown", {}) or {}
     halluc = int(stats.get("hallucination_count", 0) or 0)
-    dead_links = stats.get("dead_citations", []) or []
+    # Google Vertex grounding-redirect URLs (vertexaisearch.cloud.google.com)
+    # return 403 to HEAD probes — they are opaque citation WRAPPERS, not dead or
+    # hallucinated destination pages. Excluding them from the dead-link count
+    # prevents the false "AI cited N 404/hallucinated links" claim.
+    def _is_grounding_redirect(u: str) -> bool:
+        return "grounding-api-redirect" in u or "vertexaisearch" in u
+    _dead_all = stats.get("dead_citations", []) or []
+    dead_links = [d for d in _dead_all if not _is_grounding_redirect(str(d.get("url", "")))]
+    unverifiable_redirects = [d for d in _dead_all if _is_grounding_redirect(str(d.get("url", "")))]
     by_cat = stats.get("by_category", {}) or {}
 
     # ---- Fold perplexity_browser in as a FIRST-CLASS tested engine -------
@@ -542,10 +550,16 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
                 f"负 {sent_break.get('negative', 0)}",
             ])
         dead_cnt = len(dead_links)
-        halluc_status = "🟢 全部可达" if dead_cnt == 0 else f"🔴 {dead_cnt} 个失效/幻觉"
+        redir_cnt = len(unverifiable_redirects)
+        if dead_cnt > 0:
+            halluc_status = f"🔴 {dead_cnt} 个失效/幻觉"
+        elif redir_cnt > 0:
+            halluc_status = f"🟡 {redir_cnt} 个无法探测（Google grounding 重定向，403）"
+        else:
+            halluc_status = "🟢 全部可达"
         table_d_rows.append([
             "引用链接事实性核查", halluc_status,
-            f"失效/幻觉 {halluc}", "—", "—",
+            f"失效/幻觉 {dead_cnt}", "—", "—",
         ])
 
     findings: list[dict] = []
@@ -866,13 +880,27 @@ def _module_backlinks_news(backlink: dict, news: dict) -> dict:
             "联系各未链接提及站点请求加链至官网；可用模板化外联。",
             "OFFSITE-002", "backlink",
             evidence=um_str))
-    # FINDING 3 — news authority gap (honest disambiguation, no hedge)
+    # FINDING 3 — news authority gap, framed by the ACTUAL tier mix (no hardcoded
+    # "all Tier-3" claim — it must match the LLM-classified breakdown).
+    _t1 = tiers.get("tier_1", 0); _t2 = tiers.get("tier_2", 0)
+    _t3 = tiers.get("tier_3", 0); _t4 = tiers.get("tier_4_press_release", 0)
+    _has_authority = _t1 > 0 or _t2 > 0
+    if _has_authority:
+        _news_sev = "P2"
+        _news_title = f"权威媒体覆盖偏薄（T1={_t1} / T2={_t2}），可放大扩展"
+        _news_desc = (
+            f"经实体消歧后 {verified_count} 篇真实品牌报道，其中权威级 T1={_t1} / T2={_t2}，"
+            f"其余 T3={_t3} / PR={_t4}；权威赢得媒体仍偏少；无 Knowledge Panel（{kp}）。"
+            "继续扩大 T1/T2 报道可进一步增强 E-E-A-T 与 AI 搜索引用。")
+    else:
+        _news_sev = "P1"
+        _news_title = "缺乏权威媒体报道（无 T1/T2）"
+        _news_desc = (
+            f"经实体消歧后 {verified_count} 篇真实品牌报道全部为 T3/PR（T3={_t3} / PR={_t4}），"
+            f"{news_namesake_n} 篇同名误匹配已排除；无任何 T1/T2 权威媒体，无 Knowledge Panel（{kp}）。"
+            "缺 T1/T2 报道会损害 E-E-A-T 与 AI 搜索引用。")
     findings.append(_finding(
-        "P1", "新闻覆盖全部为 Tier-3，缺乏权威媒体",
-        (f"经实体消歧后仅 {verified_count} 篇为真实品牌报道，{news_namesake_n} 篇同名误匹配已排除；"
-         f"分级 T1={tiers.get('tier_1',0)} / T2={tiers.get('tier_2',0)} / T3={tiers.get('tier_3',0)} — "
-         f"真正的品牌赢得媒体很薄；无 Knowledge Panel（{kp}）。"
-         "缺 T1/T2 报道会损害 E-E-A-T 与 AI 搜索引用。"),
+        _news_sev, _news_title, _news_desc,
         ("跑 Digital PR / HARO 对接 T1/T2 媒体（见 digital_pr_opportunities），"
          "并建立 Crunchbase/Wikidata/Wikipedia 实体以触发 Knowledge Panel。"),
         "OFFSITE-003", "news",
@@ -889,8 +917,8 @@ def _module_backlinks_news(backlink: dict, news: dict) -> dict:
     return {
         "icon": "🔗", "title_zh": "站外反链与新闻权威度", "title_en": "Backlinks & News Authority",
         "score": _module_score(findings),
-        "summary_html": (f"<p>外部提及约 {ext} 个（估算），{unlinked_n} 个真实未链接外联线索；"
-                         f"经实体消歧后真实品牌报道 {verified_count} 篇（全部 Tier-3），"
+        "summary_html": (f"<p>外部提及约 {ext} 个（估算），{unlinked_n} 个未链接外联线索（搜索级估算，未抓取验证）；"
+                         f"经实体消歧后真实品牌报道 {verified_count} 篇（分级 {tier_str}，格式 T1/T2/T3/PR），"
                          f"已排除 {total_namesakes} 个同名异主实体；无 Knowledge Panel。</p>"
                          f"<p>⚠️ {_trunc(disclaimer, 90)}</p>"),
         "data_table": {"headers": ["指标", "数值", "评级/状态"], "rows": rows},
@@ -962,21 +990,28 @@ def _module_community_presence(community: dict) -> dict:
         ("将计数视为发现信号；上报客户前人工区分品牌 vs 通用短语提及。"),
         "COMMUNITY-002", "community",
         evidence=_trunc(method, 80)))
-    # FINDING 3 — forums gap
+    # FINDING 3 — forums depth (title + framing must match the actual count;
+    # no hardcoded vertical examples — those vary by the brand's real industry).
+    _forum_n = forums.get("mention_count", 0)
+    if _forum_n == 0:
+        _forum_title = "Forums 渠道空白"
+        _forum_desc = ("未检测到行业论坛提及 — 相关垂直行业论坛是人类发现与 AI 引用的未开发面。")
+    else:
+        _forum_title = "Forums 提及待深化（置信度有限）"
+        _forum_desc = (f"检测到 {_forum_n} 条论坛提及但置信度低（可能含通用短语误匹配）— "
+                       "相关垂直行业论坛仍是可扩大的人类发现与 AI 引用面。")
     findings.append(_finding(
-        "P2", "Forums 渠道空白",
-        (f"forums.mention_count={forums.get('mention_count',0)}，置信度低 — "
-         "智能家居/户外生活/DIY 等垂直论坛是人类发现与 AI 引用的未开发面。"),
-        "按 opportunities 参与 2-3 个相关论坛/社区，扩大 Reddit 之外的引用面。",
+        "P2", _forum_title, _forum_desc,
+        "按 opportunities 参与 2-3 个相关行业论坛/社区，扩大 Reddit 之外的引用面。",
         "COMMUNITY-003", "community",
-        evidence=f"forums 提及 {forums.get('mention_count',0)}。"))
+        evidence=f"forums 提及 {_forum_n}（置信度 {forums.get('confidence','—')}）。"))
 
     return {
         "icon": "💬", "title_zh": "社区与对话式提及", "title_en": "Community & Conversational Presence",
         "score": _module_score(findings),
         "summary_html": (f"<p>{total} 条社区提及（Reddit {reddit.get('mention_count',0)} 横跨 "
                          f"{len(subs)} 子版块，正向为主；Quora {quora.get('mention_count',0)} 多为通用短语误匹配；"
-                         f"forums 0）；部分具备 AI 引用条件。</p>"),
+                         f"forums {forums.get('mention_count',0)}）；部分具备 AI 引用条件。</p>"),
         "data_table": {"headers": ["指标", "数值", "评级/置信度"], "rows": rows},
         "findings": findings,
     }
@@ -1056,12 +1091,14 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
     ]
 
     findings: list[dict] = []
-    # FINDING A — missing expected types
-    if missing:
+    has_schema = block_count > 0 and bool(found_types)
+    # FINDING A — missing expected types (only meaningful when SOME schema exists;
+    # a total absence is covered by FINDING C's "no JSON-LD" branch instead).
+    if missing and has_schema:
         findings.append(_finding(
             "P2", f"缺少推荐的 Schema 类型 ({', '.join(missing)})",
             ("Organization schema 是 Google Knowledge Panel 与 AI 搜索引用的核心实体信号；"
-             "已声明 OnlineStore 但缺独立 Organization 实体，导致品牌实体图谱不完整。"),
+             f"已声明 {types_str} 但缺失上述推荐类型，导致品牌实体图谱不完整。"),
             "在首页 <head> 加 Organization JSON-LD，含 name/url/logo/sameAs(社媒)。",
             "SCHEMA-001", "schema",
             evidence=f"已检测类型: {types_str}；缺失期望类型: {', '.join(missing)}。",
@@ -1083,18 +1120,41 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
                 evidence=f"{f.get('schema_type')} 含嵌套类型 {', '.join(nested) or '无'}，但无 Rich Result 规则。",
                 confidence=0.7))
             break
-    # FINDING C — field completeness (PASS if all complete)
-    if not any((f.get("required_missing") or f.get("recommended_missing")) for f in sch_findings):
+    # FINDING C — schema PRESENCE, then field completeness.
+    if not has_schema:
+        # No USABLE JSON-LD — never claim "complete". Distinguish a true absence
+        # (block_count==0) from blocks that exist but failed to parse / yielded
+        # no recognized @type (block_count>0, found_types empty).
+        if block_count > 0:
+            _sch_title = "结构化数据存在但无法解析/无有效类型"
+            _sch_impact = (f"页面含 {block_count} 个 JSON-LD 块，但未解析出任何有效 schema.org 类型"
+                           f"（解析错误 {parse_errors}）。无法被 Google 富结果与 AI 搜索作为实体信号使用。")
+            _sch_action = "修复 JSON-LD 语法/@type 字段，确保至少 Organization + WebSite 可被解析。"
+        else:
+            _sch_title = "未检测到结构化数据 (JSON-LD)"
+            _sch_impact = ("页面未检测到任何 JSON-LD 结构化数据。Organization / WebSite / Product / "
+                           "BreadcrumbList 等 schema 是 Google 富结果与 AI 搜索实体识别的核心信号，"
+                           "缺失会显著降低被引用与富摘要资格。")
+            _sch_action = "在首页 <head> 至少添加 Organization + WebSite JSON-LD；产品页补 Product schema。"
+        findings.append(_finding(
+            "P1", _sch_title, _sch_impact, _sch_action,
+            "SCHEMA-003", "schema",
+            evidence=f"JSON-LD 块数 {block_count}，解析错误 {parse_errors}，检测到类型: {types_str}。",
+            code_snippet=(
+                '{\n  "@context": "https://schema.org",\n  "@type": "Organization",\n'
+                '  "name": "<品牌名>",\n  "url": "<网站>",\n  "logo": "<logo URL>",\n'
+                '  "sameAs": ["<社媒1>", "<社媒2>"]\n}'),
+            code_language="JSON-LD", paste_location="首页 <head> 标签内", confidence=0.9))
+    elif not any((f.get("required_missing") or f.get("recommended_missing")) for f in sch_findings):
         wins = [f"{f.get('schema_type')}: {f.get('rich_results_eligibility')}"
                 for f in sch_findings if f.get("rich_results_eligibility")
                 and "no rule" not in str(f.get("rich_results_eligibility")).lower()]
         findings.append(_finding(
             "PASS", "已声明 Schema 类型字段完整",
-            ("WebSite/WebPage/BreadcrumbList 必填与推荐字段齐全，"
-             "WebSite 含 SearchAction 可触发 Sitelinks Search Box，BreadcrumbList 可触发 SERP 面包屑。"),
+            (f"已声明类型（{types_str}）的必填与推荐字段齐全。"),
             "维持现有 schema 字段完整度。",
             "SCHEMA-003", "schema",
-            evidence="；".join(wins)))
+            evidence="；".join(wins) or f"已检测类型: {types_str}。"))
     # FINDING D — content freshness (stale P2 only if >50, else PASS)
     if stale > 50:
         findings.append(_finding(
@@ -1180,9 +1240,12 @@ def _module_social_nap(social: dict, nap: dict) -> dict:
         elif url:
             val = "已建档 · 数据未知"
         else:
-            val = "无账号"
+            # The social probe only inspects links ON the website — a missing url
+            # means "not linked from the site", NOT "no account exists" (the
+            # brand may have an unlinked profile that NAP/search later finds).
+            val = "站点未链接"
         if not url:
-            status = "❌ 缺失"
+            status = "❌ 站点未链接"
         elif act is True:
             status = "✅ 活跃"
         else:

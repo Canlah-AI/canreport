@@ -218,7 +218,15 @@ def run_audit(
 
     tracking_tags = tracking_result.get("tags_detected", {})
     tracking_summary = "<p>"
-    detected_tags = [name for name, found in tracking_tags.items() if found]
+    # Each value is a per-tag dict {label, found, matched_text}; a bare dict is
+    # always truthy, so we MUST read `.found` (not the dict itself) or every tag
+    # would be reported as detected. Tolerate the legacy bool shape too.
+    def _tag_found(v: object) -> bool:
+        return bool(v.get("found")) if isinstance(v, dict) else bool(v)
+    detected_tags = [
+        (v.get("label") or name) if isinstance(v, dict) else name
+        for name, v in tracking_tags.items() if _tag_found(v)
+    ]
     if detected_tags:
         tracking_summary += f"已检测到: {', '.join(detected_tags)}。"
     else:

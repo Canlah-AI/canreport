@@ -1,92 +1,491 @@
 {
-  "version": 1,
   "cdn_header_rules": [
-    ["cf-ray", ".+", "cloudflare"],
-    ["server", "(?i)cloudflare", "cloudflare"],
-    ["x-amz-cf-id", ".+", "cloudfront"],
-    ["x-amz-cf-pop", ".+", "cloudfront"],
-    ["via", "(?i)cloudfront", "cloudfront"],
-    ["x-akamai-request-id", ".+", "akamai"],
-    ["x-akamai-transformed", ".+", "akamai"],
-    ["server", "(?i)akamai", "akamai"],
-    ["x-cdn", "(?i)incapsula|imperva", "imperva"],
-    ["server", "(?i)keycdn", "keycdn"],
-    ["x-served-by", "(?i)cache-", "fastly"],
-    ["server", "(?i)\\bvercel\\b", "vercel"],
-    ["x-vercel-id", ".+", "vercel"],
-    ["x-vercel-cache", ".+", "vercel"],
-    ["server", "(?i)netlify", "netlify"],
-    ["x-nf-request-id", ".+", "netlify"],
-    ["server", "(?i)bunnycdn|bunny", "bunny"],
-    ["server", "(?i)tengine", "alibaba"],
-    ["eagleid", ".+", "alibaba"],
-    ["via", "(?i)\\.cdngslb\\.com|alicdn|aliyun", "alibaba"],
-    ["x-swift-savetime", ".+", "alibaba"],
-    ["server", "(?i)\\bgws\\b|tencent|qcloud", "tencent"],
-    ["x-nws-log-uuid", ".+", "tencent"],
-    ["x-daa-tunnel", ".+", "tencent"],
-    ["server", "(?i)gcore|g-core", "gcore"],
-    ["server", "(?i)cdn77", "cdn77"],
-    ["x-cdn77-request-id", ".+", "cdn77"],
-    ["x-sucuri-id", ".+", "sucuri"],
-    ["x-sucuri-cache", ".+", "sucuri"],
-    ["x-cache", "(?i)hit|miss", "generic_cdn"]
+    [
+      "cf-ray",
+      ".+",
+      "cloudflare"
+    ],
+    [
+      "server",
+      "(?i)cloudflare",
+      "cloudflare"
+    ],
+    [
+      "x-amz-cf-id",
+      ".+",
+      "cloudfront"
+    ],
+    [
+      "x-amz-cf-pop",
+      ".+",
+      "cloudfront"
+    ],
+    [
+      "via",
+      "(?i)cloudfront",
+      "cloudfront"
+    ],
+    [
+      "x-akamai-request-id",
+      ".+",
+      "akamai"
+    ],
+    [
+      "x-akamai-transformed",
+      ".+",
+      "akamai"
+    ],
+    [
+      "server",
+      "(?i)akamai",
+      "akamai"
+    ],
+    [
+      "x-cdn",
+      "(?i)incapsula|imperva",
+      "imperva"
+    ],
+    [
+      "server",
+      "(?i)keycdn",
+      "keycdn"
+    ],
+    [
+      "x-served-by",
+      "(?i)cache-",
+      "fastly"
+    ],
+    [
+      "server",
+      "(?i)\\bvercel\\b",
+      "vercel"
+    ],
+    [
+      "x-vercel-id",
+      ".+",
+      "vercel"
+    ],
+    [
+      "x-vercel-cache",
+      ".+",
+      "vercel"
+    ],
+    [
+      "server",
+      "(?i)netlify",
+      "netlify"
+    ],
+    [
+      "x-nf-request-id",
+      ".+",
+      "netlify"
+    ],
+    [
+      "server",
+      "(?i)bunnycdn|bunny",
+      "bunny"
+    ],
+    [
+      "server",
+      "(?i)tengine",
+      "alibaba"
+    ],
+    [
+      "eagleid",
+      ".+",
+      "alibaba"
+    ],
+    [
+      "via",
+      "(?i)\\.cdngslb\\.com|alicdn|aliyun",
+      "alibaba"
+    ],
+    [
+      "x-swift-savetime",
+      ".+",
+      "alibaba"
+    ],
+    [
+      "server",
+      "(?i)\\bgws\\b|tencent|qcloud",
+      "tencent"
+    ],
+    [
+      "x-nws-log-uuid",
+      ".+",
+      "tencent"
+    ],
+    [
+      "x-daa-tunnel",
+      ".+",
+      "tencent"
+    ],
+    [
+      "server",
+      "(?i)gcore|g-core",
+      "gcore"
+    ],
+    [
+      "server",
+      "(?i)cdn77",
+      "cdn77"
+    ],
+    [
+      "x-cdn77-request-id",
+      ".+",
+      "cdn77"
+    ],
+    [
+      "x-sucuri-id",
+      ".+",
+      "sucuri"
+    ],
+    [
+      "x-sucuri-cache",
+      ".+",
+      "sucuri"
+    ],
+    [
+      "x-cache",
+      "(?i)hit|miss",
+      "generic_cdn"
+    ]
   ],
   "tag_detectors": [
-    ["ga4", "Google Analytics 4", "googletagmanager\\.com/gtag/js\\?id=G-[A-Z0-9]{8,12}\\b"],
-    ["gtm", "Google Tag Manager", "googletagmanager\\.com/gtm\\.js\\?id=GTM-[A-Z0-9]{5,9}\\b"],
-    ["google_ads", "Google Ads Tag", "googletagmanager\\.com/gtag/js\\?id=AW-[0-9]{8,12}\\b"],
-    ["meta_pixel", "Meta Pixel", "connect\\.facebook\\.net/[a-zA-Z_]+/fbevents\\.js"],
-    ["tiktok_pixel", "TikTok Pixel", "analytics\\.tiktok\\.com/i18n/pixel|ttq\\.load\\s*\\("],
-    ["pinterest_tag", "Pinterest Tag", "s\\.pinimg\\.com/ct/core\\.js|pintrk\\s*\\("],
-    ["linkedin_insight", "LinkedIn Insight Tag", "snap\\.licdn\\.com/li\\.lms-analytics/insight\\.min\\.js|_linkedin_partner_id"],
-    ["twitter_pixel", "Twitter/X Pixel", "static\\.ads-twitter\\.com/uwt\\.js|twq\\s*\\("],
-    ["snap_pixel", "Snap Pixel", "sc-static\\.net/scevent\\.min\\.js|snaptr\\s*\\("],
-    ["reddit_pixel", "Reddit Pixel", "redditstatic\\.com/ads/pixel\\.js|rdt\\s*\\("],
-    ["bing_uet", "Microsoft/Bing UET", "bat\\.bing\\.com/bat\\.js|window\\.uetq"],
-    ["baidu_tongji", "Baidu Tongji", "hm\\.baidu\\.com/hm\\.js"],
-    ["plausible", "Plausible Analytics", "plausible\\.io/js/script(?:\\.[a-z.]+)?\\.js"],
-    ["umami", "Umami Analytics", "data-website-id[^>]*umami|/umami(?:\\.[a-z]+)?\\.js"],
-    ["matomo", "Matomo/Piwik", "matomo\\.js|piwik\\.js|_paq\\.push"],
-    ["clarity", "Microsoft Clarity", "clarity\\.ms/tag/|clarity\\(\\s*[\"']set"],
-    ["hotjar", "Hotjar", "static\\.hotjar\\.com/c/hotjar-|hj\\s*\\(\\s*[\"']"]
+    [
+      "ga4",
+      "Google Analytics 4",
+      "googletagmanager\\.com/gtag/js\\?id=G-[A-Z0-9]{8,12}\\b"
+    ],
+    [
+      "gtm",
+      "Google Tag Manager",
+      "googletagmanager\\.com/gtm\\.js\\?id=GTM-[A-Z0-9]{5,9}\\b"
+    ],
+    [
+      "google_ads",
+      "Google Ads Tag",
+      "googletagmanager\\.com/gtag/js\\?id=AW-[0-9]{8,12}\\b"
+    ],
+    [
+      "meta_pixel",
+      "Meta Pixel",
+      "connect\\.facebook\\.net/[a-zA-Z_]+/fbevents\\.js"
+    ],
+    [
+      "tiktok_pixel",
+      "TikTok Pixel",
+      "analytics\\.tiktok\\.com/i18n/pixel|ttq\\.load\\s*\\("
+    ],
+    [
+      "pinterest_tag",
+      "Pinterest Tag",
+      "s\\.pinimg\\.com/ct/core\\.js|pintrk\\s*\\("
+    ],
+    [
+      "linkedin_insight",
+      "LinkedIn Insight Tag",
+      "snap\\.licdn\\.com/li\\.lms-analytics/insight\\.min\\.js|_linkedin_partner_id"
+    ],
+    [
+      "twitter_pixel",
+      "Twitter/X Pixel",
+      "static\\.ads-twitter\\.com/uwt\\.js|twq\\s*\\("
+    ],
+    [
+      "snap_pixel",
+      "Snap Pixel",
+      "sc-static\\.net/scevent\\.min\\.js|snaptr\\s*\\("
+    ],
+    [
+      "reddit_pixel",
+      "Reddit Pixel",
+      "redditstatic\\.com/ads/pixel\\.js|rdt\\s*\\("
+    ],
+    [
+      "bing_uet",
+      "Microsoft/Bing UET",
+      "bat\\.bing\\.com/bat\\.js|window\\.uetq"
+    ],
+    [
+      "baidu_tongji",
+      "Baidu Tongji",
+      "hm\\.baidu\\.com/hm\\.js"
+    ],
+    [
+      "plausible",
+      "Plausible Analytics",
+      "plausible\\.io/js/script(?:\\.[a-z.]+)?\\.js"
+    ],
+    [
+      "umami",
+      "Umami Analytics",
+      "data-website-id[^>]*umami|/umami(?:\\.[a-z]+)?\\.js"
+    ],
+    [
+      "matomo",
+      "Matomo/Piwik",
+      "matomo\\.js|piwik\\.js|_paq\\.push"
+    ],
+    [
+      "clarity",
+      "Microsoft Clarity",
+      "clarity\\.ms/tag/|clarity\\(\\s*[\\\"']set"
+    ],
+    [
+      "hotjar",
+      "Hotjar",
+      "static\\.hotjar\\.com/c/hotjar-|hj\\s*\\(\\s*[\\\"']"
+    ]
   ],
   "feature_detectors": [
-    ["consent_mode_v2", "Consent Mode v2", "gtag\\s*\\(\\s*['\"]consent['\"]\\s*,\\s*['\"]default['\"]"],
-    ["enhanced_conversions", "Enhanced Conversions", "gtag\\s*\\(\\s*['\"]set['\"]\\s*,\\s*['\"]user_data['\"]"],
-    ["conversion_event", "Conversion Event", "gtag\\s*\\(\\s*['\"]event['\"]\\s*,\\s*['\"]conversion['\"]"],
-    ["purchase_event", "Purchase Event", "gtag\\s*\\(\\s*['\"]event['\"]\\s*,\\s*['\"]purchase['\"]"],
-    ["recaptcha_v2", "reCAPTCHA v2", "google\\.com/recaptcha/api\\.js|g-recaptcha"],
-    ["recaptcha_v3", "reCAPTCHA v3", "google\\.com/recaptcha/api\\.js\\?render="],
-    ["recaptcha_enterprise", "reCAPTCHA Enterprise", "google\\.com/recaptcha/enterprise\\.js"],
-    ["turnstile", "Cloudflare Turnstile", "challenges\\.cloudflare\\.com/turnstile/"]
+    [
+      "consent_mode_v2",
+      "Consent Mode v2",
+      "gtag\\s*\\(\\s*['\"]consent['\"]\\s*,\\s*['\"]default['\"]"
+    ],
+    [
+      "enhanced_conversions",
+      "Enhanced Conversions",
+      "gtag\\s*\\(\\s*['\"]set['\"]\\s*,\\s*['\"]user_data['\"]"
+    ],
+    [
+      "conversion_event",
+      "Conversion Event",
+      "gtag\\s*\\(\\s*['\"]event['\"]\\s*,\\s*['\"]conversion['\"]"
+    ],
+    [
+      "purchase_event",
+      "Purchase Event",
+      "gtag\\s*\\(\\s*['\"]event['\"]\\s*,\\s*['\"]purchase['\"]"
+    ],
+    [
+      "recaptcha_v2",
+      "reCAPTCHA v2",
+      "google\\.com/recaptcha/api\\.js|g-recaptcha"
+    ],
+    [
+      "recaptcha_v3",
+      "reCAPTCHA v3",
+      "google\\.com/recaptcha/api\\.js\\?render="
+    ],
+    [
+      "recaptcha_enterprise",
+      "reCAPTCHA Enterprise",
+      "google\\.com/recaptcha/enterprise\\.js"
+    ],
+    [
+      "turnstile",
+      "Cloudflare Turnstile",
+      "challenges\\.cloudflare\\.com/turnstile/"
+    ]
   ],
   "social_platforms": {
-    "linkedin":   {"url_regex": "https?://(?:www\\.)?linkedin\\.com/company/[A-Za-z0-9._-]+", "site_query": "site:linkedin.com/company", "generic_handles": ["share", "shareArticle", "sharing", "feed", "jobs"]},
-    "youtube":    {"url_regex": "https?://(?:www\\.)?youtube\\.com/(?:@|c/|channel/|user/)[A-Za-z0-9._-]+", "site_query": "site:youtube.com", "generic_handles": ["embed", "watch", "results", "feed", "playlist"]},
-    "twitter":    {"url_regex": "https?://(?:www\\.)?(?:twitter|x)\\.com/[A-Za-z0-9_]+", "site_query": "site:x.com OR site:twitter.com", "generic_handles": ["intent", "share", "home", "i", "search", "explore", "settings"]},
-    "facebook":   {"url_regex": "https?://(?:www\\.)?facebook\\.com/[A-Za-z0-9._-]+", "site_query": "site:facebook.com", "generic_handles": ["sharer", "sharer.php", "share.php", "dialog", "plugins", "tr", "groups"]},
-    "instagram":  {"url_regex": "https?://(?:www\\.)?instagram\\.com/[A-Za-z0-9._-]+", "site_query": "site:instagram.com", "generic_handles": ["p", "reel", "tv", "explore", "accounts"]},
-    "tiktok":     {"url_regex": "https?://(?:www\\.)?tiktok\\.com/@[A-Za-z0-9._-]+", "site_query": "site:tiktok.com", "generic_handles": ["explore", "foryou", "tag", "music", "discover"]},
-    "pinterest":  {"url_regex": "https?://(?:www\\.)?pinterest\\.(?:com|[a-z.]+)/[A-Za-z0-9._-]+", "site_query": "site:pinterest.com", "generic_handles": ["pin", "search", "ideas", "today"]},
-    "threads":    {"url_regex": "https?://(?:www\\.)?threads\\.net/@[A-Za-z0-9._-]+", "site_query": "site:threads.net", "generic_handles": ["search", "explore"]},
-    "xiaohongshu":{"url_regex": "https?://(?:www\\.)?xiaohongshu\\.com/user/profile/[A-Za-z0-9]+", "site_query": "site:xiaohongshu.com", "generic_handles": ["explore", "search_result"]},
-    "weibo":      {"url_regex": "https?://(?:www\\.)?weibo\\.com/[A-Za-z0-9._-]+", "site_query": "site:weibo.com", "generic_handles": ["search", "login", "signup"]},
-    "bilibili":   {"url_regex": "https?://(?:www\\.|space\\.)?bilibili\\.com/[0-9]+", "site_query": "site:bilibili.com", "generic_handles": ["search", "video", "v"]},
-    "douyin":     {"url_regex": "https?://(?:www\\.)?douyin\\.com/user/[A-Za-z0-9_-]+", "site_query": "site:douyin.com", "generic_handles": ["search", "discover"]}
+    "linkedin": {
+      "url_regex": "https?://(?:www\\.)?linkedin\\.com/company/[A-Za-z0-9._-]+",
+      "site_query": "site:linkedin.com/company",
+      "generic_handles": [
+        "share",
+        "shareArticle",
+        "sharing",
+        "feed",
+        "jobs"
+      ]
+    },
+    "youtube": {
+      "url_regex": "https?://(?:www\\.)?youtube\\.com/(?:@|c/|channel/|user/)[A-Za-z0-9._-]+",
+      "site_query": "site:youtube.com",
+      "generic_handles": [
+        "embed",
+        "watch",
+        "results",
+        "feed",
+        "playlist"
+      ]
+    },
+    "twitter": {
+      "url_regex": "https?://(?:www\\.)?(?:twitter|x)\\.com/[A-Za-z0-9_]+",
+      "site_query": "site:x.com OR site:twitter.com",
+      "generic_handles": [
+        "intent",
+        "share",
+        "home",
+        "i",
+        "search",
+        "explore",
+        "settings"
+      ]
+    },
+    "facebook": {
+      "url_regex": "https?://(?:www\\.)?facebook\\.com/[A-Za-z0-9._-]+",
+      "site_query": "site:facebook.com",
+      "generic_handles": [
+        "sharer",
+        "sharer.php",
+        "share.php",
+        "dialog",
+        "plugins",
+        "tr",
+        "groups"
+      ]
+    },
+    "instagram": {
+      "url_regex": "https?://(?:www\\.)?instagram\\.com/[A-Za-z0-9._-]+",
+      "site_query": "site:instagram.com",
+      "generic_handles": [
+        "p",
+        "reel",
+        "tv",
+        "explore",
+        "accounts"
+      ]
+    },
+    "tiktok": {
+      "url_regex": "https?://(?:www\\.)?tiktok\\.com/@[A-Za-z0-9._-]+",
+      "site_query": "site:tiktok.com",
+      "generic_handles": [
+        "explore",
+        "foryou",
+        "tag",
+        "music",
+        "discover"
+      ]
+    },
+    "pinterest": {
+      "url_regex": "https?://(?:www\\.)?pinterest\\.(?:com|[a-z.]+)/[A-Za-z0-9._-]+",
+      "site_query": "site:pinterest.com",
+      "generic_handles": [
+        "pin",
+        "search",
+        "ideas",
+        "today"
+      ]
+    },
+    "threads": {
+      "url_regex": "https?://(?:www\\.)?threads\\.net/@[A-Za-z0-9._-]+",
+      "site_query": "site:threads.net",
+      "generic_handles": [
+        "search",
+        "explore"
+      ]
+    },
+    "xiaohongshu": {
+      "url_regex": "https?://(?:www\\.)?xiaohongshu\\.com/user/profile/[A-Za-z0-9]+",
+      "site_query": "site:xiaohongshu.com",
+      "generic_handles": [
+        "explore",
+        "search_result"
+      ]
+    },
+    "weibo": {
+      "url_regex": "https?://(?:www\\.)?weibo\\.com/[A-Za-z0-9._-]+",
+      "site_query": "site:weibo.com",
+      "generic_handles": [
+        "search",
+        "login",
+        "signup"
+      ]
+    },
+    "bilibili": {
+      "url_regex": "https?://(?:www\\.|space\\.)?bilibili\\.com/[0-9]+",
+      "site_query": "site:bilibili.com",
+      "generic_handles": [
+        "search",
+        "video",
+        "v"
+      ]
+    },
+    "douyin": {
+      "url_regex": "https?://(?:www\\.)?douyin\\.com/user/[A-Za-z0-9_-]+",
+      "site_query": "site:douyin.com",
+      "generic_handles": [
+        "search",
+        "discover"
+      ]
+    }
   },
   "social_block_substrings": [
-    "/sharer", "/share?", "/share/", "shareArticle", "intent/tweet",
-    "intent/follow", "/dialog", "/pin/create", "/watch?", "/embed/",
-    "/results", "/p/", "/reel/", "/tv/", "/explore", "/tr?",
-    "/plugins/", "/hashtag/", "/search"
+    "/sharer",
+    "/share?",
+    "/share/",
+    "shareArticle",
+    "intent/tweet",
+    "intent/follow",
+    "/dialog",
+    "/pin/create",
+    "/watch?",
+    "/embed/",
+    "/results",
+    "/p/",
+    "/reel/",
+    "/tv/",
+    "/explore",
+    "/tr?",
+    "/plugins/",
+    "/hashtag/",
+    "/search"
   ],
   "serp_generic_platforms": [
-    "facebook.com", "instagram.com", "youtube.com", "linkedin.com",
-    "twitter.com", "x.com", "wikipedia.org", "reddit.com", "medium.com",
-    "quora.com", "yelp.com", "yelp.com.sg", "tripadvisor.com", "google.com",
-    "pinterest.com", "tiktok.com", "threads.net",
-    "weibo.com", "xiaohongshu.com", "douyin.com", "bilibili.com",
-    "zhihu.com", "baidu.com", "baike.baidu.com", "lazada.com", "shopee.com"
+    "facebook.com",
+    "instagram.com",
+    "youtube.com",
+    "linkedin.com",
+    "twitter.com",
+    "x.com",
+    "wikipedia.org",
+    "reddit.com",
+    "medium.com",
+    "quora.com",
+    "yelp.com",
+    "yelp.com.sg",
+    "tripadvisor.com",
+    "google.com",
+    "pinterest.com",
+    "tiktok.com",
+    "threads.net",
+    "weibo.com",
+    "xiaohongshu.com",
+    "douyin.com",
+    "bilibili.com",
+    "zhihu.com",
+    "baidu.com",
+    "baike.baidu.com",
+    "lazada.com",
+    "shopee.com"
+  ],
+  "competitor_exclude_domains": [
+    "_serp_generic_platforms",
+    "cnet.com",
+    "zdnet.com",
+    "techradar.com",
+    "pcmag.com",
+    "tomshardware.com",
+    "theverge.com",
+    "engadget.com",
+    "wired.com",
+    "forbes.com",
+    "gartner.com",
+    "g2.com",
+    "capterra.com",
+    "getapp.com",
+    "softwareadvice.com",
+    "trustpilot.com",
+    "trustradius.com",
+    "sourceforge.net",
+    "producthunt.com",
+    "dictionary.com",
+    "merriam-webster.com",
+    "britannica.com",
+    "investopedia.com",
+    "indeed.com",
+    "glassdoor.com",
+    "ziprecruiter.com",
+    "crunchbase.com",
+    "bing.com",
+    "duckduckgo.com",
+    "yahoo.com",
+    "msn.com",
+    "amazon.com",
+    "ebay.com"
   ]
 }

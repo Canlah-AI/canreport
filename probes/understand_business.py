@@ -51,6 +51,10 @@ _SYNTH_PROMPT = """You are a B2B / industrial market analyst. Below is text scra
 
 CRITICAL: capture EVERY distinct business line / segment, not just the most prominent. Multi-business manufacturers often run several segments (e.g. rugged computing AND VR/AR AND consumer electronics) that a single page would miss. If the text shows multiple segments, list them all.
 
+GROUNDING (equally critical): every segment, product line and proof point MUST be backed by an actual PRODUCT or SOLUTION the company presents — shown in product/solution sections, navigation, or page headings with real offerings beneath them. Do NOT infer, generalize, or invent a business the company is not visibly in.
+
+Ignore SEO / meta-tag artifacts: a word that appears only as an isolated keyword (in a meta description, title tag, or keyword list) WITHOUT a corresponding product/solution section is NOT a business segment — skip it. For example, a hardware manufacturer whose meta description happens to contain "software agent" / "软件代理" / "consulting" but whose actual products are all physical devices is NOT a "Software Agency"; do not list such a segment. When a candidate segment has no concrete product/solution behind it in the text, omit it. Prefer fewer, well-evidenced segments over a longer speculative list.
+
 Return ONLY this JSON (no prose, no code fence):
 {{
   "summary_en": "<2-3 sentences, plain English: what this company does>",

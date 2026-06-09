@@ -430,6 +430,11 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
                 # news_coverage_scan tiers outlets industry-aware (no hardcoded
                 # outlet table) — pass the detected industry through.
                 result = fn(url, brand, industry_keywords, industry=industry_hint or "")
+            elif key == "prompts":
+                # prompt_discovery builds buyer prompts from seeds; prefer the
+                # canonical product-category noun phrases (grammatical, on-register)
+                # over tokenized industry keywords ("a good rugged for my home").
+                result = fn(url, brand, industry_keywords, categories=categories)
             else:
                 result = fn(url, brand, industry_keywords)
         elif needs_brand:

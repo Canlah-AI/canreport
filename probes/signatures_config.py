@@ -110,6 +110,16 @@ _DEFAULTS: dict[str, Any] = {
         "weibo.com", "xiaohongshu.com", "douyin.com", "bilibili.com",
         "zhihu.com", "baidu.com", "baike.baidu.com", "lazada.com", "shopee.com",
     ],
+    "competitor_exclude_domains": [
+        "_serp_generic_platforms",
+        "cnet.com", "zdnet.com", "techradar.com", "pcmag.com", "tomshardware.com",
+        "theverge.com", "engadget.com", "wired.com", "forbes.com", "gartner.com",
+        "g2.com", "capterra.com", "getapp.com", "softwareadvice.com", "trustpilot.com",
+        "trustradius.com", "sourceforge.net", "producthunt.com",
+        "dictionary.com", "merriam-webster.com", "britannica.com", "investopedia.com",
+        "indeed.com", "glassdoor.com", "ziprecruiter.com", "crunchbase.com",
+        "bing.com", "duckduckgo.com", "yahoo.com", "msn.com", "amazon.com", "ebay.com",
+    ],
 }
 
 _cache: dict[str, Any] | None = None
@@ -165,6 +175,7 @@ def _valid_str_list(v: Any) -> bool:
 
 
 _VALIDATORS = {
+    "competitor_exclude_domains": _valid_str_list,
     "cdn_header_rules": lambda v: _valid_rows(v, 1),      # (header, value_regex, label)
     "tag_detectors": lambda v: _valid_rows(v, 2),         # (key, label, regex)
     "feature_detectors": lambda v: _valid_rows(v, 2),     # (key, label, regex)
@@ -257,3 +268,18 @@ def get_social_block_substrings() -> tuple[str, ...]:
 
 def get_serp_generic_platforms() -> set[str]:
     return set(_load_registry()["serp_generic_platforms"])
+
+
+def get_competitor_exclude_domains() -> set[str]:
+    """Domains that are never a brand's competitor (social + media/review/
+    reference/job/search aggregators). Used to keep AI-citation competitor
+    tallies clean. The token '_serp_generic_platforms' expands to that list so
+    the two stay in sync without duplication."""
+    reg = _load_registry()
+    out: set[str] = set()
+    for d in reg.get("competitor_exclude_domains", []):
+        if d == "_serp_generic_platforms":
+            out |= set(reg["serp_generic_platforms"])
+        else:
+            out.add(d)
+    return out

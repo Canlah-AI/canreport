@@ -36,9 +36,6 @@ substring over raw hints.
 - **Off-category namesake patterns** (`news_coverage_scan.OFF_CATEGORY_PATTERNS`,
   5 hardcoded industries) → LLM "is this article off-category for the brand's
   industry?".
-- **CDN / tracking-platform / social-platform detection lists**
-  (`eac_speed_probe`, `eac_tracking_probe`, `social_*`) — config-driven registry;
-  currently miss non-Google/Western vendors (Alibaba CDN, TikTok Ads, WeChat).
 - **Geography defaults** — `gl=us` for the BD AI-Overview call is a documented
   Google constraint (AIO is US-gated), not hardcoding; confirm no other stray
   `sg`/`us` default beyond the market arg.
@@ -50,3 +47,15 @@ substring over raw hints.
 - `_PRODUCT_NOUN_MAP` + `_INDUSTRY_KEYWORD_MAP` (6-industry loose tables) →
   detected english_product_hint + canonical categories.
 - Singapore `_STALE_GARBAGE_DOMAINS` blacklist → removed (vestigial).
+- News sentiment + topics + off-category namesake verdicts → batched LLM.
+- `schema_validator.INDUSTRY_EXPECTED_TYPES` (6-industry table) → LLM-derived
+  expected types, neutral [Organization, WebSite] default.
+- **CDN / tracking / social / SERP detection lists** (`eac_speed_probe`,
+  `eac_tracking_probe`, `social_influence_scan`, `serper_discovery`) → external
+  `probes/detection_signatures.json` + validated `signatures_config.py` loader
+  (per-section fallback to bundled `_DEFAULTS`, never raises). Adds modern /
+  non-Western vendors (Vercel/Netlify/Alibaba/Tencent CDN; TikTok/Pinterest/
+  LinkedIn/Reddit/Snap pixels, Bing UET, Baidu Tongji, Plausible/Umami/Matomo;
+  weibo/xiaohongshu/douyin/bilibili + CN/SEA SERP aggregators). These are
+  deterministic signatures (false-negatives, never "串"); new vendors can be
+  added by editing JSON, no code change.
