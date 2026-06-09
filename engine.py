@@ -434,6 +434,10 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
                 result = fn(url, brand, industry_keywords)
         elif needs_brand:
             result = fn(url, brand)
+        elif key == "schema":
+            # schema_validator derives expected schema.org types from the detected
+            # industry (no hardcoded industry table) — thread it through.
+            result = fn(url, industry=industry_hint or "")
         else:
             result = fn(url)
         output = result if isinstance(result, dict) else {"value": result}
