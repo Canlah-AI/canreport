@@ -991,7 +991,7 @@ def _build_findings(
             "evidence": (
                 "页面中未检测到客户评价/推荐元素 "
                 "(testimonial class, blockquote, Review/AggregateRating schema, "
-                "或第三方评价 widget 如 Trustpilot/Yotpo/Judge.me)。"
+                "或第三方评价 widget 如 Trustpilot/Google Reviews/G2 等)。"
             ),
             "confidence": 0.8,
             "impact_zh": (

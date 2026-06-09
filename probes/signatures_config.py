@@ -121,6 +121,16 @@ _DEFAULTS: dict[str, Any] = {
         "bing.com", "duckduckgo.com", "yahoo.com", "msn.com", "amazon.com", "ebay.com",
         "studocu.com", "scribd.com", "coursehero.com", "slideshare.net", "quizlet.com",
         "androidcentral.com", "androidauthority.com", "gsmarena.com", "notebookcheck.net",
+        # AI / search engines themselves are never competitors of an audited brand
+        "perplexity.com", "openai.com", "chatgpt.com", "chat.openai.com", "you.com",
+        "gemini.google.com", "bard.google.com", "copilot.microsoft.com",
+        # Horizontal B2B / consumer marketplaces (listings, not vendors)
+        "alibaba.com", "aliexpress.com", "made-in-china.com", "globalsources.com",
+        "walmart.com", "bestbuy.com", "newegg.com", "target.com",
+        # Finance / data aggregators + more tech media
+        "marketscreener.com", "space.com", "wareable.com", "pcgamer.com",
+        "tomsguide.com", "tomshardware.com", "pcworld.com", "digitaltrends.com",
+        "qualcomm.com",
     ],
 }
 
