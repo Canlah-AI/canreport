@@ -33,21 +33,16 @@ UA = (
 )
 TIMEOUT = 12.0
 
-# CDN detection: (header_name_lower, value_regex, cdn_label)
-CDN_HEADER_RULES: list[tuple[str, str, str]] = [
-    ("cf-ray", r".+", "cloudflare"),
-    ("server", r"(?i)cloudflare", "cloudflare"),
-    ("x-amz-cf-id", r".+", "cloudfront"),
-    ("x-amz-cf-pop", r".+", "cloudfront"),
-    ("via", r"(?i)cloudfront", "cloudfront"),
-    ("x-akamai-request-id", r".+", "akamai"),
-    ("x-akamai-transformed", r".+", "akamai"),
-    ("server", r"(?i)akamai", "akamai"),
-    ("x-cdn", r"(?i)incapsula|imperva", "imperva"),
-    ("server", r"(?i)keycdn", "keycdn"),
-    ("x-served-by", r"(?i)cache-", "fastly"),
-    ("x-cache", r"(?i)hit|miss", "generic_cdn"),
-]
+# CDN detection rules now come from the external signature registry
+# (probes/detection_signatures.json). Falls back to bundled defaults when the
+# JSON is absent — behavior identical to the old inline list, plus modern /
+# non-Western vendors (Vercel, Netlify, Bunny, Alibaba, Tencent, Gcore, …).
+try:
+    from probes.signatures_config import get_cdn_header_rules
+except ImportError:
+    from signatures_config import get_cdn_header_rules  # type: ignore[no-redef]
+
+CDN_HEADER_RULES: list[tuple[str, str, str]] = get_cdn_header_rules()
 
 # Countries generally considered "China mainland".
 CN_COUNTRIES = {"CN"}

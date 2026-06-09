@@ -25,38 +25,19 @@ UA = (
 )
 TIMEOUT = 12.0
 
-# Tracking tag detectors: (key, label, regex)
-# Patterns use path-context anchors to avoid false positives (V3 lesson).
-TAG_DETECTORS: list[tuple[str, str, str]] = [
-    ("ga4", "Google Analytics 4",
-     r"googletagmanager\.com/gtag/js\?id=G-[A-Z0-9]{8,12}\b"),
-    ("gtm", "Google Tag Manager",
-     r"googletagmanager\.com/gtm\.js\?id=GTM-[A-Z0-9]{5,9}\b"),
-    ("google_ads", "Google Ads Tag",
-     r"googletagmanager\.com/gtag/js\?id=AW-[0-9]{8,12}\b"),
-    ("meta_pixel", "Meta Pixel",
-     r"connect\.facebook\.net/[a-zA-Z_]+/fbevents\.js"),
-]
+# Tracking-tag and feature detectors now come from the external signature
+# registry (probes/detection_signatures.json). Falls back to bundled defaults
+# when the JSON is absent — behavior identical to the old inline lists (path-
+# context anchored, V3 lesson), with added non-Western/modern ad+analytics
+# vendors (TikTok/Pinterest/LinkedIn/Reddit/Snap pixels, Bing UET, Baidu
+# Tongji, Plausible, Umami, Matomo, Clarity, Hotjar).
+try:
+    from probes.signatures_config import get_tag_detectors, get_feature_detectors
+except ImportError:
+    from signatures_config import get_tag_detectors, get_feature_detectors  # type: ignore[no-redef]
 
-# Advanced feature detectors: (key, label, regex)
-FEATURE_DETECTORS: list[tuple[str, str, str]] = [
-    ("consent_mode_v2", "Consent Mode v2",
-     r"""gtag\s*\(\s*['"]consent['"]\s*,\s*['"]default['"]"""),
-    ("enhanced_conversions", "Enhanced Conversions",
-     r"""gtag\s*\(\s*['"]set['"]\s*,\s*['"]user_data['"]"""),
-    ("conversion_event", "Conversion Event",
-     r"""gtag\s*\(\s*['"]event['"]\s*,\s*['"]conversion['"]"""),
-    ("purchase_event", "Purchase Event",
-     r"""gtag\s*\(\s*['"]event['"]\s*,\s*['"]purchase['"]"""),
-    ("recaptcha_v2", "reCAPTCHA v2",
-     r"google\.com/recaptcha/api\.js|g-recaptcha"),
-    ("recaptcha_v3", "reCAPTCHA v3",
-     r"google\.com/recaptcha/api\.js\?render="),
-    ("recaptcha_enterprise", "reCAPTCHA Enterprise",
-     r"google\.com/recaptcha/enterprise\.js"),
-    ("turnstile", "Cloudflare Turnstile",
-     r"challenges\.cloudflare\.com/turnstile/"),
-]
+TAG_DETECTORS: list[tuple[str, str, str]] = get_tag_detectors()
+FEATURE_DETECTORS: list[tuple[str, str, str]] = get_feature_detectors()
 
 # PDF / download link detector.
 PDF_LINK_RE = re.compile(
