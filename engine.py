@@ -143,23 +143,11 @@ OFFSITE_PROBES: list[tuple[str, str, str, bool]] = [
 # detected product noun. Five intents: discovery, evaluation, comparison,
 # transactional, problem-led.
 
-# Map detected (Chinese) industry/product keywords → an English product noun
-# usable in buyer-search query templates. Fallback handles unknown industries.
-_PRODUCT_NOUN_MAP: list[tuple[tuple[str, ...], str, str]] = [
-    # (match keywords found in detected industry/product, english_product, use_case)
-    (("凉亭", "遮阳", "户外建材", "gazebo", "pergola", "shade", "outdoor"),
-     "outdoor gazebos", "backyard"),
-    (("服装", "时尚", "apparel", "fashion", "clothing"),
-     "clothing brands", "everyday wear"),
-    (("护肤", "美妆", "化妆", "skincare", "beauty", "cosmetic"),
-     "skincare products", "sensitive skin"),
-    (("家具", "furniture"),
-     "furniture", "small spaces"),
-    (("食品", "饮料", "food", "beverage", "snack"),
-     "food brands", "healthy eating"),
-    (("软件", "saas", "software", "app", "平台", "工具"),
-     "software tools", "small business"),
-]
+# (Removed _PRODUCT_NOUN_MAP — a 6-industry loose-keyword table. A partial
+# substring match like "outdoor" cross-contaminated unrelated brands with the
+# wrong product noun. The LLM business-understanding pass supplies the on-category
+# english_product_hint instead. Match-triggered industry-specific enrichment
+# (on a CONFIDENT match, never loose) is a backlog item.)
 
 
 def _english_product_and_usecase(industry_hint: str | None,
@@ -186,59 +174,39 @@ def _english_product_and_usecase(industry_hint: str | None,
             use_case = (use_case_hint or "").strip() or "general use"
             return noun, use_case
 
-    # 2. Legacy keyword map over the raw (Chinese/English) hints.
-    blob = " ".join(filter(None, [industry_hint, product_hint])).lower()
-    for keywords, product, use_case in _PRODUCT_NOUN_MAP:
-        if any(k.lower() in blob for k in keywords):
-            return product, use_case
-
-    # 3. Fallback: raw product hint if ASCII/English, else a generic noun.
+    # 2. Fallback: raw product hint if ASCII/English, else a generic noun.
+    # NO hardcoded industry keyword map — a partial match like "outdoor"/"home"
+    # would cross-contaminate an unrelated brand with the wrong industry's noun.
+    # The detector's english_product_hint (LLM business-understanding) above is
+    # the on-category source of truth.
     if product_hint and product_hint.isascii() and product_hint.strip():
-        return product_hint.strip(), "home use"
-    return "products in this category", "everyday use"
+        return product_hint.strip(), "general use"
+    return "products in this category", "general use"
 
 
-# Map detected (Chinese/English) industry/product keywords → a small list of
-# English industry keywords used by the news + backlink probes to disambiguate
-# genuine brand coverage from same-name (namesake) entities in other industries.
-_INDUSTRY_KEYWORD_MAP: list[tuple[tuple[str, ...], list[str]]] = [
-    (("凉亭", "遮阳", "户外建材", "gazebo", "pergola", "shade", "outdoor", "awning",
-      "patio", "canopy"),
-     ["gazebo", "shade", "awning", "pergola", "patio", "canopy", "outdoor",
-      "sail", "umbrella"]),
-    (("服装", "时尚", "apparel", "fashion", "clothing"),
-     ["apparel", "fashion", "clothing", "wear", "outfit", "style"]),
-    (("护肤", "美妆", "化妆", "skincare", "beauty", "cosmetic"),
-     ["skincare", "beauty", "cosmetic", "serum", "moisturizer", "cream"]),
-    (("家具", "furniture"),
-     ["furniture", "sofa", "chair", "table", "decor", "home"]),
-    (("食品", "饮料", "food", "beverage", "snack"),
-     ["food", "beverage", "snack", "drink", "nutrition", "flavor"]),
-    (("软件", "saas", "software", "app", "平台", "工具"),
-     ["software", "saas", "app", "platform", "tool", "cloud"]),
-]
+# (Removed _INDUSTRY_KEYWORD_MAP — a 6-industry loose-keyword cluster table.
+# A partial match bled one industry's keywords into an unrelated brand's
+# namesake disambiguation. derive_industry_keywords now uses the detected
+# hints + LLM canonical categories instead.)
 
 
 def derive_industry_keywords(industry_hint: str | None,
-                             product_hint: str | None) -> list[str]:
-    """Build a small English industry-keyword list from detected hints.
+                             product_hint: str | None,
+                             categories: list[str] | None = None) -> list[str]:
+    """Build a small English industry-keyword list from DETECTED context.
 
-    Brand-agnostic. Used by the news_coverage_scan + backlink_scan probes to
-    separate genuine brand coverage from same-name (namesake) entities in other
-    industries. Always includes any ASCII words from the raw hints so unmapped
-    industries still get a usable signal.
+    Brand-agnostic, NO hardcoded industry table: folds the ASCII tokens from the
+    detected industry/product hints + the LLM-detected canonical categories
+    (business-understanding pass). Used by news/backlink probes to separate
+    genuine coverage from same-name namesakes — so an unrelated industry's
+    keywords can never cross-contaminate a brand that didn't match it.
     """
-    blob = " ".join(filter(None, [industry_hint, product_hint])).lower()
+    parts = [industry_hint, product_hint] + [c for c in (categories or []) if c]
+    blob = " ".join(filter(None, parts)).lower()
     keywords: list[str] = []
-    for match_words, kws in _INDUSTRY_KEYWORD_MAP:
-        if any(k.lower() in blob for k in match_words):
-            keywords.extend(kws)
-            break
-    # Always fold in ASCII tokens from the raw hints (handles unmapped industries).
     for token in blob.replace("/", " ").replace(",", " ").split():
         if token.isascii() and token.isalpha() and len(token) > 2:
             keywords.append(token)
-    # De-duplicate, preserve order.
     seen: set[str] = set()
     result: list[str] = []
     for k in keywords:
@@ -456,7 +424,7 @@ def _run_one(engine_root: Path, key: str, module_name: str, fn_name: str,
         # news + backlink probes take industry_keywords (3rd arg) to exclude
         # same-name (namesake) entities from other industries.
         if key in _INDUSTRY_KEYWORD_PROBES:
-            industry_keywords = derive_industry_keywords(industry_hint, product_hint)
+            industry_keywords = derive_industry_keywords(industry_hint, product_hint, categories)
             logger.info("%s industry_keywords: %s", key, industry_keywords)
             if key == "news":
                 # news_coverage_scan tiers outlets industry-aware (no hardcoded
