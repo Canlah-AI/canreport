@@ -119,6 +119,8 @@ _DEFAULTS: dict[str, Any] = {
         "dictionary.com", "merriam-webster.com", "britannica.com", "investopedia.com",
         "indeed.com", "glassdoor.com", "ziprecruiter.com", "crunchbase.com",
         "bing.com", "duckduckgo.com", "yahoo.com", "msn.com", "amazon.com", "ebay.com",
+        "studocu.com", "scribd.com", "coursehero.com", "slideshare.net", "quizlet.com",
+        "androidcentral.com", "androidauthority.com", "gsmarena.com", "notebookcheck.net",
     ],
 }
 

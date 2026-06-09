@@ -230,9 +230,11 @@ def _build_buyer_prompts(seeds: list[str], questions: list[str],
         _add(q if q.endswith("?") else q + "?", _classify_intent(q))
 
     # 2) Templated prompts across the four intent buckets.
+    # Register-neutral so they read naturally for both B2B procurement and
+    # consumer intent (no "for my home" — off-register for industrial buyers).
     templates = [
         (f"What are the best {product} options to buy?", "recommendation"),
-        (f"Recommend a good {product} for my home", "recommendation"),
+        (f"Which {product} would you recommend?", "recommendation"),
         (f"Which {product} brand is most highly rated?", "recommendation"),
         (f"Compare top {product} brands", "comparison"),
         (f"{product} vs alternatives — which is better?", "comparison"),

@@ -123,6 +123,53 @@ def _call_llm(prompt: str) -> dict | None:
         return None
 
 
+def _corroborate_segments(profile: dict) -> dict:
+    """Drop segments that share NO token with the company's actual OFFERINGS
+    (product lines, categories, summaries). This removes SEO/meta artifacts and
+    over-extrapolations the LLM faithfully extracts but that are not real
+    business lines — e.g. a hardware maker that holds 'software copyrights'
+    yielding a bogus 'Software Agency' segment.
+
+    Deliberately excludes proof_points / positioning from the vocabulary: those
+    carry credentials and marketing fluff (e.g. 'software copyrights') that would
+    falsely corroborate an off-topic segment. Conservative: never fires without a
+    substantial vocab, never drops the only/last segment, and bails out (keeps
+    all) if it would drop half-or-more — a sign the vocab simply doesn't match
+    this brand's wording rather than that the segments are bogus."""
+    segs = profile.get("segments")
+    if not isinstance(segs, list) or len(segs) <= 2:
+        return profile
+    base: list[str] = []
+    for k in ("product_lines", "canonical_categories"):
+        v = profile.get(k)
+        if isinstance(v, list):
+            base.extend(str(x) for x in v)
+    for k in ("primary_category", "summary_en", "summary_zh"):
+        v = profile.get(k)
+        if isinstance(v, str):
+            base.append(v)
+    vocab = " ".join(base).lower()
+    if len(vocab) < 60:  # too little to judge — don't risk over-filtering
+        return profile
+
+    def _corroborated(seg: str) -> bool:
+        toks = re.findall(r"[a-z0-9]{4,}", seg.lower())
+        cjk = re.findall(r"[一-鿿]{2,}", seg)
+        if not toks and not cjk:
+            return True
+        return any(t in vocab for t in toks) or any(t in vocab for t in cjk)
+
+    kept = [s for s in segs if _corroborated(s)]
+    dropped = [s for s in segs if not _corroborated(s)]
+    # Bail out if the filter is too aggressive (vocab mismatch, not bogus segs).
+    if not dropped or not kept or len(dropped) >= len(kept):
+        return profile
+    logger.info("dropped uncorroborated segments (SEO/credential artifacts): %s", dropped)
+    profile["segments"] = kept
+    profile["_dropped_segments"] = dropped
+    return profile
+
+
 def understand_business(url: str, home_html: str | None = None) -> dict | None:
     """Read several key pages, synthesize what the company does. None on failure."""
     if home_html is None:
@@ -145,6 +192,7 @@ def understand_business(url: str, home_html: str | None = None) -> dict | None:
     profile = _call_llm(_SYNTH_PROMPT.format(pages=blob))
     if not profile:
         return None
+    profile = _corroborate_segments(profile)
     profile["_pages_read"] = len(pages)
     profile["_read_urls"] = read_urls
     return profile

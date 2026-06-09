@@ -930,13 +930,19 @@ def _build_findings(
                     "合作品牌 logo 墙、案例研究链接"
                 )
 
+            _hp_fallback = product_analysis.get("_homepage_fallback", False)
+            _analyzed = product_analysis.get("_analyzed_url", "")
+            _scope = "首页（未提供产品详情页 URL，以首页代测）" if _hp_fallback else "产品详情页"
             findings.append({
-                "severity": "P1",
+                "severity": "P1" if not _hp_fallback else "P2",
                 "rule_id": "TRUST-002",
-                "title_zh": "产品详情页缺少可信度元素",
+                "title_zh": ("产品详情页缺少可信度元素" if not _hp_fallback
+                             else "可信度元素缺失（基于首页代测，未提供产品页 URL）"),
                 "evidence": (
-                    f"产品页面缺少以下可信度元素: "
+                    f"已分析页面: {_analyzed or _scope}。缺少以下可信度元素: "
                     f"{', '.join(missing_elements)}。"
+                    + ("（注：未提供产品详情页 URL，以上基于首页扫描，"
+                       "传入 --product-page 可获得更准确的产品页评估。）" if _hp_fallback else "")
                 ),
                 "confidence": 0.85,
                 "impact_zh": (
@@ -1094,14 +1100,19 @@ def probe(
         prod_html, prod_status = _fetch(product_page_url)
         if prod_status == 200 and prod_html:
             product_analysis = _analyze_product_page(prod_html)
+            product_analysis["_analyzed_url"] = product_page_url
+            product_analysis["_homepage_fallback"] = False
     else:
-        # If no product page provided, check homepage for trust signals
-        # so TRUST-003 can still fire meaningfully
+        # No product page URL provided — fall back to scanning the HOMEPAGE for
+        # trust signals. Flag this so the finding doesn't overclaim that a real
+        # product-detail page was audited.
         product_analysis = {
             "has_specs_table": False,
             "has_testimonials": home_testimonials,
             "has_trust_badges": any(p.search(home_html) for p in TRUST_BADGE_PATTERNS),
             "has_comparison": any(p.search(home_html) for p in COMPARISON_PATTERNS),
+            "_analyzed_url": url,
+            "_homepage_fallback": True,
         }
 
     findings = _build_findings(

@@ -24,6 +24,29 @@ from typing import Any
 from reconcile import reconcile_modules
 from scoring import compute_overall_score
 
+# Non-competitor domains (social / media / review / reference / study / search
+# aggregators) — used to keep the AI-citation competitor tally clean. Same
+# registry the engine uses; falls back to a minimal set if unavailable.
+try:
+    from probes.signatures_config import get_competitor_exclude_domains
+    _COMPETITOR_EXCLUDE = get_competitor_exclude_domains()
+except Exception:
+    _COMPETITOR_EXCLUDE = {
+        "facebook.com", "instagram.com", "youtube.com", "linkedin.com", "twitter.com",
+        "x.com", "wikipedia.org", "reddit.com", "medium.com", "quora.com", "google.com",
+    }
+
+
+def _is_real_competitor(domain: str) -> bool:
+    """A competitor domain is one NOT in the non-competitor exclusion set and
+    not an .edu/.gov (academic/government cites are sources, never vendors)."""
+    d = str(domain or "").lower().strip().lstrip(".")
+    if not d:
+        return False
+    if d.endswith((".edu", ".gov", ".ac.uk", ".edu.cn")):
+        return False
+    return not any(d == ex or d.endswith("." + ex) for ex in _COMPETITOR_EXCLUDE)
+
 _FINDING_DEFAULTS = {
     "confidence": 0.85,
     "needs_account": False,
@@ -263,7 +286,7 @@ def _build_evidence_pack(ai: dict, perplexity_browser: dict,
     intro = (
         f"<p>这是 AI 引用力诊断的<strong>原始证据</strong>：下列每一块都是某一条真实买家查询"
         f"在 AI 引擎里的<strong>逐字回答原话</strong>（verbatim）与其引用的来源链接。"
-        f"生成式引擎每条查询跑 {runs_n} 次取平均，此处展示其中代表性的一次捕获。</p>"
+        f"生成式引擎对每条查询最多取样 {runs_n} 次（降低随机性；部分引擎取样更少），此处展示其中代表性的一次捕获。</p>"
         f"<p>当回答里<strong>没有出现 {html.escape(str(brand))}</strong>、却列出竞品域名时，"
         f"即为「声量被竞品夺走」的直接物证 —— 怀疑论者也无可辩驳。</p>")
     return {
@@ -395,11 +418,14 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
             "best_position": min(pb_positions) if pb_positions else None,
         }
         # Fold Perplexity competitors into the shared competitor tally so SoV
-        # and the "竞品反被推荐" table reflect every tested engine.
+        # and the "竞品反被推荐" table reflect every tested engine. Perplexity
+        # captures often list CITATION SOURCES (publishers / study sites / .edu)
+        # rather than vendors — filter those so they aren't mislabeled competitors.
         pb_comp_tally: dict[str, int] = {}
         for r in pb_results:
             for c in (r.get("competitors_cited", []) or r.get("competitors", []) or []):
-                pb_comp_tally[c] = pb_comp_tally.get(c, 0) + 1
+                if _is_real_competitor(c):
+                    pb_comp_tally[c] = pb_comp_tally.get(c, 0) + 1
         if pb_comp_tally:
             existing = {c.get("domain"): c for c in top_comp}
             for dom, n in pb_comp_tally.items():
@@ -411,6 +437,11 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
                               reverse=True)
         # Drop Perplexity from the backlog display — it WAS tested.
         backlog = [b for b in backlog if "perplexity" not in str(b).lower()]
+
+    # Final guard: drop any non-competitor domains (publishers / review / study /
+    # .edu / search aggregators) that slipped into the tally from any engine —
+    # the registry exclusion list may have grown since the probe ran.
+    top_comp = [c for c in top_comp if _is_real_competitor(c.get("domain", ""))]
 
     # Blended citation rate = mean of per-engine citation_rate across TESTED engines
     # (None = not_present, excluded). Generative rates are already multi-run avgs.
@@ -578,11 +609,11 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
             (f"当潜在客户问 {engines_label} 关于本品类的买家问题时，AI 引擎在 "
              f"{total_rows} 次结果中从未提及 {brand}，却反复推荐 [{top3}]。"
              f"声量占比(SoV) {sov}% — 在 AI 驱动的购买决策中你的品牌几乎隐形，这些流量近乎 100% 流向竞品。"
-             f"生成式引擎已做 {runs_n} 次跑取平均，零引用不是抽样噪声，是结构性缺位。"),
+             f"生成式引擎已对每条查询最多取样 {runs_n} 次，零引用不是抽样噪声，是结构性缺位。"),
             ("建立 GEO 资产：结构化产品数据(Schema.org Product)、第三方评测/对比内容、"
              "可被 AI 抓取的 citation-bait 数据页，目标 90 天内在至少 1 个引擎获得引用，SoV 提升至 ≥10%。"),
             "AICITE-001", "live_ai_search",
-            evidence=(f"已测试引擎引用率均为 0%（共 {total_rows} 行结果，{runs_n} 次跑取平均）；"
+            evidence=(f"已测试引擎引用率均为 0%（共 {total_rows} 行结果，生成式引擎每查询最多取样 {runs_n} 次）；"
                       f"SoV {sov}%；竞品 {len(top_comp)} 个共被引用 {comp_total} 次。"),
             confidence=0.9))
 
@@ -619,12 +650,12 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     if queries_run:
         q_list = "\n".join(f"• {q}" for q in queries_run[:5])
         findings.append(_finding(
-            "P2", "测试的真实买家查询（多次跑取平均）",
-            (f"本模块以下列真实买家意图查询实测（非通用模板），生成式引擎每条查询跑 {runs_n} 次取平均，"
-             f"证明方法论针对你的品类且结果稳健：\n{q_list}"),
+            "P2", "测试的真实买家查询（生成式引擎多次取样）",
+            (f"本模块以下列真实买家意图查询实测（基于你的品类，非通用模板），生成式引擎对每条查询最多取样 {runs_n} 次"
+             f"（部分引擎取样更少）以降低随机性：\n{q_list}"),
             "—",
             "AICITE-003", "live_ai_search",
-            evidence=f"共测试 {len(queries_run)} 条买家查询 × {runs_n} 次跑（生成式引擎）。"))
+            evidence=f"共测试 {len(queries_run)} 条买家查询（生成式引擎每查询最多取样 {runs_n} 次）。"))
 
     n_cited_comp = len(top_comp)
     comp_total = sum(c.get("appearances", 0) for c in top_comp)
@@ -659,7 +690,7 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
             f"<p>实测 {n_tested_engines} 个 AI 引擎"
             f"（另 {n_not_present} 个未出现{_backlog_summary}），"
             f"{n_cited_comp} 个竞品反被推荐。引用链接事实性核查："
-            f"{('全部可达' if not dead_links else str(len(dead_links)) + ' 个失效/幻觉')}。</p>"),
+            f"{(str(len(dead_links)) + ' 个失效/幻觉' if dead_links else (str(len(unverifiable_redirects)) + ' 个 Google grounding 重定向无法探测(403)' if unverifiable_redirects else '全部可达'))}。</p>"),
         "data_table": {
             "headers": ["引擎/项目", "状态/值", "测试", "引用率/明细", "排名/补充"],
             "rows": (table_a_rows + table_b_rows + table_c_rows + table_d_rows)},
@@ -721,16 +752,21 @@ def _module_reputation(rep: dict) -> dict:
             impact = ("Google 评价是最强的信任 + 本地 SEO 信号。SERP 未出现任何评价，"
                       "买家搜索品牌评价时看不到星级，削弱转化并压制富结果 / 地图包资格。")
         elif prio == 2:
-            title = f"全部 {ts_count} 条站内推荐语均为匿名"
-            impact = (f"站内 {ts_count} 条五星推荐语 attributed_count={attributed} — 全部匿名或仅名字。"
-                      "匿名好评可信度低、易被视为伪造，且因无 AggregateRating schema 不具备富结果资格。")
-            action = action + "（另：补 Review/AggregateRating JSON-LD，让 Judge.me 数据可被机器读取。）"
+            if ts_count == 0:
+                title = "站内无客户推荐语 / 评价"
+                impact = ("站点未检测到任何客户推荐语或评价。社会证明（署名推荐语 + AggregateRating "
+                          "schema）是信任与富结果的关键信号，完全缺失会削弱转化与 AI 引用资格。")
+            else:
+                title = f"站内 {ts_count} 条推荐语缺少署名（{anon} 条匿名）"
+                impact = (f"站内 {ts_count} 条推荐语中 {anon} 条匿名（仅 {attributed} 条署名）。"
+                          "匿名好评可信度低、易被视为伪造，且因无 AggregateRating schema 不具备富结果资格。")
+            action = action + "（另：补 Review/AggregateRating JSON-LD，让评价数据可被机器读取。）"
         elif prio == 4:
             title = "未链接 Facebook 商业主页"
             impact = "未检测到 Facebook 主页 — 缺失社会证明面与 NAP 一致性信号。"
         else:
             title = "无 TripAdvisor 收录（视品类而定）"
-            impact = "TripAdvisor 对户外结构电商品牌相关性低，标记为可选，不重罚。"
+            impact = "TripAdvisor 对 B2B / 非本地服务品类相关性低，标记为可选，不重罚。"
         findings.append(_finding(
             sev, title, impact, action,
             f"REPUT-00{prio}", "reviews_scan",
@@ -740,14 +776,19 @@ def _module_reputation(rep: dict) -> dict:
     # Map WEAK grade → numeric band (derived only)
     band = {"DANGEROUS": 15, "WEAK": 35, "ACCEPTABLE": 58, "STRONG": 85}.get(grade, 50)
 
+    if ts_count == 0:
+        _ts_clause = "站内未检测到客户推荐语"
+    elif anon >= ts_count:
+        _ts_clause = f"站内 {ts_count} 条推荐语全部匿名"
+    else:
+        _ts_clause = f"站内 {ts_count} 条推荐语中 {anon} 条匿名"
     return {
         "icon": "⭐", "title_zh": "声誉与评价", "title_en": "Reputation & Reviews",
         "score": band,
         "summary_html": (f"<p>综合声誉评级: <strong>{grade}</strong>。"
-                         f"Google 评价未在 SERP 出现，站内 {ts_count} 条推荐语全部匿名"
-                         f"（{anon}/{ts_count}），无 AggregateRating schema。</p>"
-                         f"<p>⚠️ Google Business Profile 检查在 SG SERP 区域执行，"
-                         f"建议对照 US/全球 GBP 复核后再行动。</p>"),
+                         f"Google 评价未在 SERP 出现，{_ts_clause}，无 AggregateRating schema。</p>"
+                         f"<p>⚠️ Google Business Profile 检查在目标市场 SERP 区域执行，"
+                         f"建议对照主要目标市场 GBP 复核后再行动。</p>"),
         "data_table": {"headers": ["反馈面 Surface", "状态 / 数值", "细节 Detail"], "rows": rows},
         "findings": findings,
     }
@@ -1289,11 +1330,12 @@ def _module_social_nap(social: dict, nap: dict) -> dict:
         findings.append(_finding(
             "P1", "社交媒体影响力薄弱",
             (f"影响力评级 {inf_grade}，{active} 个活跃平台，总触达仅 {reach}；"
-             f"{unknown_n} 个平台已建档但活跃度/粉丝未知，部分平台完全缺失。"
+             f"{unknown_n} 个平台已建档但活跃度/粉丝未知，部分平台未在官网链接"
+             "（仅检测站内链接，未代表账号一定不存在）。"
              "社交信号影响品牌搜索量与 AI 引用频率。"),
-            ("补建缺失账号并激活已建档平台、定期发布；在站点页脚与 Schema sameAs 中声明全部社媒链接。"),
+            ("在官网页脚与 Schema sameAs 中声明并链接全部社媒账号；若尚无账号则补建并定期发布。"),
             "SOCIAL-001", "social",
-            evidence=f"活跃 {active}、未知 {unknown_n}；总触达 {reach}。"))
+            evidence=f"活跃 {active}、未知 {unknown_n}；总触达 {reach}（基于站内链接检测）。"))
     # FINDING B — NAP inconsistency
     if nap_grade in ("INCONSISTENT", "PARTIAL"):
         issues_text = "; ".join(str(i) for i in issues[:3]) if issues else "信息不一致"
