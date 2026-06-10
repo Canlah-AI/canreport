@@ -478,10 +478,25 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
         # Drop Perplexity from the backlog display — it WAS tested.
         backlog = [b for b in backlog if "perplexity" not in str(b).lower()]
 
-    # Final guard: drop any non-competitor domains (publishers / review / study /
-    # .edu / search aggregators) that slipped into the tally from any engine —
-    # the registry exclusion list may have grown since the probe ran.
+    # Final guard (runs AFTER the Perplexity fold, when appearance counts are
+    # final): (1) drop block-listed non-competitors, then (2) structural de-noise
+    # — keep only domains cited ≥2× (real competitors recur across answers;
+    # one-off media/source domains a single answer named appear once and can't be
+    # enumerated by any block-list). Fall back to top-5 by appearance if too few
+    # recur, so the "竞品垄断" finding still has concrete names.
     top_comp = [c for c in top_comp if _is_real_competitor(c.get("domain", ""))]
+    # A genuine recurring competitor is named across MULTIPLE independent AI
+    # answers. Real rivals cluster well above the noise (e.g. 5-8 vs 1-2), so
+    # require ≥3 appearances; degrade to ≥2, then top-5, so the finding always
+    # has names even on a thin run.
+    _strong = [c for c in top_comp if c.get("appearances", 0) >= 3]
+    _recurring = [c for c in top_comp if c.get("appearances", 0) >= 2]
+    if len(_strong) >= 2:
+        top_comp = _strong
+    elif len(_recurring) >= 2:
+        top_comp = _recurring
+    else:
+        top_comp = top_comp[:5]
 
     # Blended citation rate = mean of per-engine citation_rate across TESTED engines
     # (None = not_present, excluded). Generative rates are already multi-run avgs.
@@ -1975,14 +1990,11 @@ def _strip_non_competitors(offsite: dict[str, dict]) -> None:
     st = ai.get("summary_stats") or {}
     tc = st.get("top_competitors_cited")
     if isinstance(tc, list):
-        cleaned = [c for c in tc if _is_real_competitor((c or {}).get("domain", ""))]
-        # Structural de-noise: a static block-list can't enumerate every one-off
-        # media/source domain an answer happens to name. Real competitors RECUR
-        # across answers; long-tail noise appears once. Keep domains cited ≥2×;
-        # if that leaves too few to make the point, fall back to the top 5 by
-        # appearance (still block-list filtered) so the "竞品垄断" finding has names.
-        recurring = [c for c in cleaned if (c or {}).get("appearances", 0) >= 2]
-        st["top_competitors_cited"] = recurring if len(recurring) >= 2 else cleaned[:5]
+        # Block-list / heuristic filter only. The ≥2-appearance de-noise is
+        # applied LATER, after the Perplexity fold, so a one-off source added by
+        # the fold is also caught (see _module_ai_citation final guard).
+        st["top_competitors_cited"] = [
+            c for c in tc if _is_real_competitor((c or {}).get("domain", ""))]
     for r in ai.get("results", []) or []:
         if isinstance(r, dict) and isinstance(r.get("competitors_cited"), list):
             r["competitors_cited"] = [c for c in r["competitors_cited"]
