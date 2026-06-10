@@ -336,7 +336,7 @@ def _evidence_block_html(engine: str, query: str, runs_n: int,
     quoted = html.escape(_trunc(clean_excerpt, 700)).replace("\n", "<br>")
     comp_html = ""
     if comps:
-        comp_html = ("<div style='font-size:9pt;margin-top:6px;'><strong>同一回答里被推荐的竞品：</strong> "
+        comp_html = ("<div style='font-size:9pt;margin-top:6px;'><strong>同一回答里提及的其他品牌/来源域名：</strong> "
                      + "、".join(html.escape(_trunc(str(c), 40)) for c in comps[:8])
                      + "</div>")
     url_html = ""
@@ -385,6 +385,28 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     runs_n = stats.get("runs_per_generative_engine", 1) or 1
     backlog = list(stats.get("backlog_engines", []) or [])
     sov = stats.get("sov_percent", 0.0) or 0.0
+    _results_for_rate = ai.get("results", []) or []
+    # Recompute generative-engine citation_rate on in_sources (the brand DOMAIN
+    # actually cited as a source) so the per-engine column matches the headline +
+    # position columns. The engine's raw rate counts brand-NAME mentions
+    # (target_cited), which contradicts a 0% domain-citation headline (e.g. Gemini
+    # names the brand but never cites its domain). Name-mentions are kept as a
+    # separate, softer signal so we don't hide them either.
+    _gen_tot: dict[str, int] = {}
+    _gen_src: dict[str, int] = {}
+    _gen_name: dict[str, int] = {}
+    for _r in _results_for_rate:
+        _e = _r.get("engine")
+        if _e in ("gemini_search", "openai_chatgpt"):
+            _gen_tot[_e] = _gen_tot.get(_e, 0) + 1
+            if _r.get("in_sources"):
+                _gen_src[_e] = _gen_src.get(_e, 0) + 1
+            if _r.get("target_cited"):
+                _gen_name[_e] = _gen_name.get(_e, 0) + 1
+    for _e, _tot in _gen_tot.items():
+        if _e in per_engine and _tot:
+            per_engine[_e]["citation_rate"] = round(_gen_src.get(_e, 0) / _tot, 4)
+            per_engine[_e]["name_mentions"] = _gen_name.get(_e, 0)
     sentiment = stats.get("overall_sentiment", "n/a (not mentioned)")
     sent_break = stats.get("sentiment_breakdown", {}) or {}
     halluc = int(stats.get("hallucination_count", 0) or 0)
@@ -509,6 +531,11 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
         rate = s.get("citation_rate")
         gen_tag = f"（{s.get('runs', runs_n)} 次跑取平均）" if s.get("generative") else ""
         rate_cell = "—" if rate is None else f"{_rate_status(rate)} {round(rate * 100)}%{gen_tag}"
+        # If the domain was never cited but the brand NAME appeared, say so —
+        # name-mention ≠ being cited as a source, but it's an honest softer signal.
+        _nm = s.get("name_mentions", 0)
+        if (rate or 0) == 0 and _nm:
+            rate_cell += f"（域名 0；品牌名提及 {_nm} 次）"
         best = s.get("best_position")
         table_a_rows.append([
             friendly,
@@ -1065,11 +1092,18 @@ def _module_community_presence(community: dict) -> dict:
         "COMMUNITY-003", "community",
         evidence=f"forums 提及 {_forum_n}（置信度 {forums.get('confidence','—')}）。"))
 
+    _pos, _neg = sent.get("positive", 0), sent.get("negative", 0)
+    if _pos > _neg and _pos > 0:
+        _sent_label = "正向为主"
+    elif _neg > _pos:
+        _sent_label = "负向为主"
+    else:
+        _sent_label = "以中性为主"
     return {
         "icon": "💬", "title_zh": "社区与对话式提及", "title_en": "Community & Conversational Presence",
         "score": _module_score(findings),
         "summary_html": (f"<p>{total} 条社区提及（Reddit {reddit.get('mention_count',0)} 横跨 "
-                         f"{len(subs)} 子版块，正向为主；Quora {quora.get('mention_count',0)} 多为通用短语误匹配；"
+                         f"{len(subs)} 子版块，{_sent_label}；Quora {quora.get('mention_count',0)} 多为通用短语误匹配；"
                          f"forums {forums.get('mention_count',0)}）；部分具备 AI 引用条件。</p>"),
         "data_table": {"headers": ["指标", "数值", "评级/置信度"], "rows": rows},
         "findings": findings,
@@ -1108,6 +1142,13 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
     velocity_basis = pv.get("velocity_basis", "all_urls")
     blog_detected = freshness.get("blog_detected", False)
     content_grade = freshness.get("content_grade", "—")
+    # Freshness is only meaningful with a parseable sitemap. When unmeasurable,
+    # show "—" in the table (not a fabricated 0.0%/0 页) and the finding below
+    # reports "无法测量" instead of a green "healthy".
+    _fresh_measurable = (bool(sitemap) and fresh_grade != "UNKNOWN"
+                         and content_grade not in ("NONE", "—")
+                         and pv.get("velocity_measurable", True) is not False)
+    _na = "—（无 sitemap，未测量）"
 
     rows: list[list] = [
         ["JSON-LD 块数", str(block_count), "✅" if block_count > 0 else "❌"],
@@ -1141,12 +1182,15 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
         ["Sitemap 内容构成",
          f"产品 {url_cats.get('product',0)} · 博客 {url_cats.get('blog',0)} · "
          f"静态 {url_cats.get('static',0)} · 其他 {url_cats.get('other',0)}", "—"],
-        ["发布速率 (近30天)", str(pv.get("last_30_days", 0)), "—"],
-        ["月均发布 (12月)", f"{pv.get('avg_per_month_12m', 0)} 页/月", f"基准: {velocity_basis}"],
-        ["最近更新", str(most_recent), fresh_grade],
-        ["近90天更新占比", f"{pct90}%", "✅" if pct90 >= 50 else "⚠️"],
-        ["过期页面 (>1年)", str(stale), "⚠️" if stale > 50 else "—"],
-        ["内容更新评级", content_grade, "—"],
+        ["发布速率 (近30天)", str(pv.get("last_30_days", 0)) if _fresh_measurable else _na, "—"],
+        ["月均发布 (12月)", (f"{pv.get('avg_per_month_12m', 0)} 页/月" if _fresh_measurable else _na),
+         f"基准: {velocity_basis}" if _fresh_measurable else "—"],
+        ["最近更新", str(most_recent) if _fresh_measurable else _na, fresh_grade],
+        ["近90天更新占比", (f"{pct90}%" if _fresh_measurable else _na),
+         ("✅" if pct90 >= 50 else "⚠️") if _fresh_measurable else "—"],
+        ["过期页面 (>1年)", str(stale) if _fresh_measurable else _na,
+         ("⚠️" if stale > 50 else "—") if _fresh_measurable else "—"],
+        ["内容更新评级", content_grade if content_grade not in ("NONE", "—") else "无数据", "—"],
     ]
 
     findings: list[dict] = []
@@ -1217,7 +1261,6 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
     # FINDING D — content freshness. NEVER claim "healthy" when freshness is
     # unmeasurable (no sitemap → stale/pct90 default to 0, which would fake a
     # green PASS on zero data).
-    _fresh_measurable = bool(sitemap) and fresh_grade != "UNKNOWN" and content_grade not in ("NONE", "—")
     if not _fresh_measurable:
         findings.append(_finding(
             "P2", "内容新鲜度无法测量（未发现可用 sitemap）",
@@ -1513,8 +1556,14 @@ def _module_crawlability(crawl: dict) -> dict:
     rows.append(["── 页面级健康度 ──", "", ""])
     rows.append(["缺失 Canonical 页面", str(canonical.get("missing_count", 0)),
                  "⚠️" if canonical.get("missing_count", 0) else "✅"])
-    rows.append(["Canonical 冲突", str(len(canonical.get("conflicts", []) or [])),
-                 "⚠️" if canonical.get("conflicts") else "✅"])
+    # "Conflicts" was the wrong field (often empty); the real signal is
+    # cross_canonical_count — pages canonicalizing to a DIFFERENT URL (often the
+    # homepage), which de-indexes them. Surface both so we never show a false 0.
+    _cross_canon = canonical.get("cross_canonical_count", 0) or 0
+    _canon_conflicts = len(canonical.get("conflicts", []) or [])
+    _canon_issue = max(_cross_canon, _canon_conflicts)
+    rows.append(["Canonical 跨页指向 / 冲突", str(_canon_issue),
+                 "⚠️ 多页指向其他 URL" if _canon_issue else "✅"])
     rows.append(["缺失 Title 页面", str(titles.get("missing_count", 0)),
                  "⚠️" if titles.get("missing_count", 0) else "✅"])
     rows.append(["重复 Title 组", str(len(titles.get("duplicate_groups", []) or [])),
@@ -1537,8 +1586,9 @@ def _module_crawlability(crawl: dict) -> dict:
     rows.append(["全站 HTTPS", "✅ 全部安全" if https.get("all_secure", True) else "❌ 有非 HTTPS",
                  "混合内容" if https.get("mixed_content_pages") else "—"])
     if indexability:
-        rows.append(["可索引页面",
-                     f"{indexability.get('indexable_count', '—')} / {pages}", "—"])
+        _indexable = indexability.get("indexable",
+                                      indexability.get("indexable_count", "—"))
+        rows.append(["可索引页面", f"{_indexable} / {pages}", "—"])
 
     # Findings: re-surface the probe's own findings[] (already severity-tagged).
     findings: list[dict] = []
@@ -1788,7 +1838,7 @@ def _module_roadmap(modules: list[dict], offsite: dict[str, dict]) -> dict:
         ["Month 1", "基础修复 (Foundation)", m1_actions,
          "消除技术失分项，建立 AI/搜索引擎可读的实体与信任基线"],
         ["Month 2", "GEO 内容 (Citation-Bait)", m2_actions,
-         "在竞品垄断的精确查询上抢占 AI 引用位，扭转 0% 引用率"],
+         "在竞品垄断的精确查询上抢占 AI 引用位，提升域名被引用为来源的比率"],
         ["Month 3", "权威建设 (Authority)", m3_actions,
          "提升 E-E-A-T 与媒体权威，巩固 Knowledge Panel 与长期 AI 引用"],
     ]
@@ -1925,8 +1975,14 @@ def _strip_non_competitors(offsite: dict[str, dict]) -> None:
     st = ai.get("summary_stats") or {}
     tc = st.get("top_competitors_cited")
     if isinstance(tc, list):
-        st["top_competitors_cited"] = [
-            c for c in tc if _is_real_competitor((c or {}).get("domain", ""))]
+        cleaned = [c for c in tc if _is_real_competitor((c or {}).get("domain", ""))]
+        # Structural de-noise: a static block-list can't enumerate every one-off
+        # media/source domain an answer happens to name. Real competitors RECUR
+        # across answers; long-tail noise appears once. Keep domains cited ≥2×;
+        # if that leaves too few to make the point, fall back to the top 5 by
+        # appearance (still block-list filtered) so the "竞品垄断" finding has names.
+        recurring = [c for c in cleaned if (c or {}).get("appearances", 0) >= 2]
+        st["top_competitors_cited"] = recurring if len(recurring) >= 2 else cleaned[:5]
     for r in ai.get("results", []) or []:
         if isinstance(r, dict) and isinstance(r.get("competitors_cited"), list):
             r["competitors_cited"] = [c for c in r["competitors_cited"]
