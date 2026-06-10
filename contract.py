@@ -37,13 +37,25 @@ except Exception:
     }
 
 
+# Sub-host prefixes that are support/content infra, not a vendor's storefront.
+_NON_VENDOR_SUBHOSTS = ("support.", "help.", "docs.", "kb.", "status.",
+                        "blog.", "forum.", "forums.", "community.", "wiki.")
+# Tokens that mark deal/coupon/listing aggregators rather than vendors.
+_AGGREGATOR_TOKENS = ("deals", "coupon", "discount", "promocode", "voucher")
+
+
 def _is_real_competitor(domain: str) -> bool:
-    """A competitor domain is one NOT in the non-competitor exclusion set and
-    not an .edu/.gov (academic/government cites are sources, never vendors)."""
+    """A competitor domain is a real VENDOR — not in the non-competitor exclusion
+    set, not academic/government (.edu/.gov), not a support/content sub-host, and
+    not a deal/coupon aggregator (those are citation sources, never rivals)."""
     d = str(domain or "").lower().strip().lstrip(".")
     if not d:
         return False
-    if d.endswith((".edu", ".gov", ".ac.uk", ".edu.cn")):
+    if d.endswith((".edu", ".gov", ".ac.uk", ".edu.cn", ".gov.cn")):
+        return False
+    if d.startswith(_NON_VENDOR_SUBHOSTS):
+        return False
+    if any(tok in d for tok in _AGGREGATOR_TOKENS):
         return False
     return not any(d == ex or d.endswith("." + ex) for ex in _COMPETITOR_EXCLUDE)
 
@@ -232,6 +244,12 @@ def _build_evidence_pack(ai: dict, perplexity_browser: dict,
     results = ai.get("results", []) or []
     stats = ai.get("summary_stats", {}) or {}
     runs_n = stats.get("runs_per_generative_engine", 1) or 1
+    _pe = stats.get("per_engine", {}) or {}
+
+    def _engine_runs(raw_engine: str) -> int:
+        """Actual run count for THIS engine (Gemini ran N, ChatGPT 1) — never the
+        global max, so a card doesn't claim '3 次取平均' for a 1-run engine."""
+        return int(_pe.get(raw_engine, {}).get("runs") or 1)
 
     blocks: list[str] = []
 
@@ -253,7 +271,7 @@ def _build_evidence_pack(ai: dict, perplexity_browser: dict,
         blocks.append(_evidence_block_html(
             engine=_ENGINE_FRIENDLY.get(engine, engine),
             query=r.get("query", ""),
-            runs_n=runs_n if engine in _EVIDENCE_GENERATIVE_ENGINES else 1,
+            runs_n=_engine_runs(engine) if engine in _EVIDENCE_GENERATIVE_ENGINES else 1,
             run_index=r.get("run_index"),
             brand=brand, cited=cited, excerpt=excerpt,
             comps=comps, urls=urls, low_signal=False))
@@ -662,7 +680,7 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     sent_clause = (f"，AI 提及情感为 {sentiment}"
                    if (total_cited > 0 or sum(sent_break.values()) > 0)
                    else "")
-    verdict = (f"在 {total_rows} 个买家意图查询结果中（生成式引擎 {runs_n} 次跑取平均），"
+    verdict = (f"在 {total_rows} 个买家意图查询结果中（生成式引擎每查询最多取样 {runs_n} 次），"
                f"AI 引擎引用 {brand} {total_cited} 次，竞品被引用 {comp_total} 次，"
                f"声量占比(SoV) {sov}%{sent_clause}。")
 
@@ -1196,8 +1214,20 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
             "维持现有 schema 字段完整度。",
             "SCHEMA-003", "schema",
             evidence="；".join(wins) or f"已检测类型: {types_str}。"))
-    # FINDING D — content freshness (stale P2 only if >50, else PASS)
-    if stale > 50:
+    # FINDING D — content freshness. NEVER claim "healthy" when freshness is
+    # unmeasurable (no sitemap → stale/pct90 default to 0, which would fake a
+    # green PASS on zero data).
+    _fresh_measurable = bool(sitemap) and fresh_grade != "UNKNOWN" and content_grade not in ("NONE", "—")
+    if not _fresh_measurable:
+        findings.append(_finding(
+            "P2", "内容新鲜度无法测量（未发现可用 sitemap）",
+            ("未发现可解析的 XML sitemap，无法评估内容更新频率与新鲜度。"
+             "缺少 sitemap 也会拖慢 Google/AI 爬虫的发现与收录。"),
+            "在 robots.txt 声明并提交 XML sitemap（含 lastmod），再评估内容更新节奏。",
+            "SCHEMA-004", "freshness",
+            evidence=(f"sitemap_found={bool(sitemap)}，freshness_grade={fresh_grade}，"
+                      f"content_grade={content_grade}（无数据，不评级）。")))
+    elif stale > 50:
         findings.append(_finding(
             "P2", "大量页面内容过期",
             f"{stale} 个页面超过 1 年未更新。Google 偏好新鲜内容，AI 搜索引擎更倾向引用近期更新页面。",
@@ -1212,8 +1242,10 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
             "保持当前更新节奏。",
             "SCHEMA-005", "freshness",
             evidence=f"velocity_basis={velocity_basis}（注意是全站 URL 而非纯博客）。"))
-    # FINDING E — no blog / editorial hub
-    if not blog_detected and url_cats.get("blog", 0) == 0:
+    # FINDING E — no blog / editorial hub. Only assert "all product/static, 0
+    # blog" when we actually have sitemap URLs to categorize; otherwise the
+    # blog gap can't be distinguished from "no sitemap to read".
+    if not blog_detected and url_cats.get("blog", 0) == 0 and total_urls > 0:
         findings.append(_finding(
             "P2", "缺少博客/编辑内容枢纽",
             (f"站点 {total_urls} URL 中 0 篇博客（全是产品/静态页），缺乏话题权威 (E-E-A-T) 内容，"
@@ -1333,16 +1365,29 @@ def _module_social_nap(social: dict, nap: dict) -> dict:
              f"{unknown_n} 个平台已建档但活跃度/粉丝未知，部分平台未在官网链接"
              "（仅检测站内链接，未代表账号一定不存在）。"
              "社交信号影响品牌搜索量与 AI 引用频率。"),
-            ("在官网页脚与 Schema sameAs 中声明并链接全部社媒账号；若尚无账号则补建并定期发布。"),
+            ("在官网页脚与 Schema sameAs 中链接你已有的社媒账号（本次仅检测站内链接，未必代表账号不存在）；"
+             "确属空白的平台再考虑补建并定期发布。"),
             "SOCIAL-001", "social",
             evidence=f"活跃 {active}、未知 {unknown_n}；总触达 {reach}（基于站内链接检测）。"))
-    # FINDING B — NAP inconsistency
+    # FINDING B — NAP inconsistency. Only assert a real "目录与官网不符" mismatch
+    # when a directory actually reported a conflicting phone/address. A PARTIAL
+    # grade often means the directories simply don't expose NAP (all match fields
+    # null) — that's "can't verify", NOT a detected conflict.
     if nap_grade in ("INCONSISTENT", "PARTIAL"):
         issues_text = "; ".join(str(i) for i in issues[:3]) if issues else "信息不一致"
+        _real_mismatch = any(d.get("phone_match") is False or d.get("address_match") is False
+                             for d in dirs)
+        if _real_mismatch:
+            _nap_title = "NAP 信息跨目录不一致"
+            _nap_impact = ("品牌电话/地址在目录与官网不符，且官网无 Schema.org 标记，"
+                           "搜索引擎无法程序化验证 NAP — 削弱本地 SEO 与实体可信度。")
+        else:
+            _nap_title = "NAP 无法跨目录验证（目录未公开或收录稀少）"
+            _nap_impact = ("各目录未公开可比对的电话/地址，且官网无 LocalBusiness Schema 标记，"
+                           "搜索引擎无法程序化验证 NAP 一致性 — 削弱本地 SEO 与实体可信度。"
+                           "（注：这是“无法验证”，非已检测到冲突。）")
         findings.append(_finding(
-            "P2", "NAP 信息跨目录不一致",
-            ("品牌电话/地址在目录与官网不符，且官网无 Schema.org 标记，"
-             "搜索引擎无法程序化验证 NAP — 削弱本地 SEO 与实体可信度。"),
+            "P2", _nap_title, _nap_impact,
             "统一各目录 NAP，认领未收录目录 (如 Google Maps)，并加 LocalBusiness JSON-LD。",
             "SOCIAL-002", "nap",
             evidence=f"NAP 评级 {nap_grade}。问题: {_trunc(issues_text, 80)}",
@@ -1871,6 +1916,23 @@ def _strip_owned_domains(offsite: dict[str, dict], owned_domains) -> None:
         bl["unlinked_mentions"] = [m for m in ul if not _is_owned_domain(m.get("domain"), owned)]
 
 
+def _strip_non_competitors(offsite: dict[str, dict]) -> None:
+    """Remove non-competitor domains (AI engines, .edu/.gov, social/media/study/
+    marketplace/finance aggregators) from the AI-citation competitor tally at the
+    SOURCE, so both the module table AND the appendix render only real vendors.
+    Mutates offsite in place."""
+    ai = offsite.get("ai_citation") or {}
+    st = ai.get("summary_stats") or {}
+    tc = st.get("top_competitors_cited")
+    if isinstance(tc, list):
+        st["top_competitors_cited"] = [
+            c for c in tc if _is_real_competitor((c or {}).get("domain", ""))]
+    for r in ai.get("results", []) or []:
+        if isinstance(r, dict) and isinstance(r.get("competitors_cited"), list):
+            r["competitors_cited"] = [c for c in r["competitors_cited"]
+                                      if _is_real_competitor(c)]
+
+
 def build_contract(base: dict, offsite: dict[str, dict],
                    owned_domains=None) -> dict:
     """Merge base on-site audit + off-site probes into one report contract.
@@ -1879,6 +1941,7 @@ def build_contract(base: dict, offsite: dict[str, dict],
     competitor/mention/citation counting (they are not rivals or third parties).
     """
     _strip_owned_domains(offsite, owned_domains)
+    _strip_non_competitors(offsite)
     offsite_modules = [
         _module_ai_citation(
             offsite.get("ai_citation", {}), brand_name=base.get("company", ""),

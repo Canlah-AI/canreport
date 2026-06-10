@@ -191,7 +191,13 @@ def run_audit(
     form_summary = ""
     captcha = form_result.get("captcha_detected")
     forms_count = form_result.get("forms_found", 0)
-    if forms_count == 0:
+    _form_status = form_result.get("_probe_status", "ok")
+    if _form_status in ("skipped", "error"):
+        # The probe didn't run — do NOT claim "no forms detected" (unsupported).
+        form_summary = ("<p>表单探测未执行"
+                        f"（{'已跳过' if _form_status == 'skipped' else '出错'}）"
+                        "，本次未评估表单/反垃圾保护。如需评估请传入表单页 URL。</p>")
+    elif forms_count == 0:
         form_summary = "<p>未在页面上检测到表单。</p>"
     elif captcha:
         form_summary = f"<p>检测到 {forms_count} 个表单，已安装 {captcha} 保护。</p>"
