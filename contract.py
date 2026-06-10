@@ -59,6 +59,24 @@ def _is_real_competitor(domain: str) -> bool:
         return False
     return not any(d == ex or d.endswith("." + ex) for ex in _COMPETITOR_EXCLUDE)
 
+
+def _denoise_competitors(comps: list) -> list:
+    """Block-list filter + structural de-noise for the AI-citation competitor
+    tally. A genuine recurring competitor is named across MULTIPLE independent AI
+    answers (real rivals cluster at 5-8, one-off media/source noise appears once),
+    so require ≥3 appearances; degrade to ≥2 then top-5 so the list is never
+    empty on a thin run. Used by BOTH the shared-stats strip (→ appendix) and the
+    module final guard (→ ranking table) so they stay consistent."""
+    real = [c for c in (comps or []) if _is_real_competitor((c or {}).get("domain", ""))]
+    strong = [c for c in real if (c or {}).get("appearances", 0) >= 3]
+    recurring = [c for c in real if (c or {}).get("appearances", 0) >= 2]
+    if len(strong) >= 2:
+        return strong
+    if len(recurring) >= 2:
+        return recurring
+    return real[:5]
+
+
 _FINDING_DEFAULTS = {
     "confidence": 0.85,
     "needs_account": False,
@@ -479,24 +497,9 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
         backlog = [b for b in backlog if "perplexity" not in str(b).lower()]
 
     # Final guard (runs AFTER the Perplexity fold, when appearance counts are
-    # final): (1) drop block-listed non-competitors, then (2) structural de-noise
-    # — keep only domains cited ≥2× (real competitors recur across answers;
-    # one-off media/source domains a single answer named appear once and can't be
-    # enumerated by any block-list). Fall back to top-5 by appearance if too few
-    # recur, so the "竞品垄断" finding still has concrete names.
-    top_comp = [c for c in top_comp if _is_real_competitor(c.get("domain", ""))]
-    # A genuine recurring competitor is named across MULTIPLE independent AI
-    # answers. Real rivals cluster well above the noise (e.g. 5-8 vs 1-2), so
-    # require ≥3 appearances; degrade to ≥2, then top-5, so the finding always
-    # has names even on a thin run.
-    _strong = [c for c in top_comp if c.get("appearances", 0) >= 3]
-    _recurring = [c for c in top_comp if c.get("appearances", 0) >= 2]
-    if len(_strong) >= 2:
-        top_comp = _strong
-    elif len(_recurring) >= 2:
-        top_comp = _recurring
-    else:
-        top_comp = top_comp[:5]
+    # final): block-list filter + ≥3-appearance structural de-noise. Same helper
+    # as the shared-stats strip, so the ranking table and appendix agree.
+    top_comp = _denoise_competitors(top_comp)
 
     # Blended citation rate = mean of per-engine citation_rate across TESTED engines
     # (None = not_present, excluded). Generative rates are already multi-run avgs.
@@ -505,7 +508,11 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     rates = [s.get("citation_rate") or 0.0 for s in tested.values()
              if s.get("citation_rate") is not None]
     blended_rate = round(sum(rates) / len(rates), 4) if rates else 0.0
-    total_cited = sum(1 for r in results if r.get("target_cited"))
+    # "Cited" = the brand DOMAIN appears as a source (in_sources) — the GEO
+    # metric. target_cited only means the brand NAME was in the prose, which is a
+    # weaker signal and must NOT be reported as a citation (kept separately).
+    total_cited = sum(1 for r in results if r.get("in_sources"))
+    total_name_mentions = sum(1 for r in results if r.get("target_cited"))
     total_rows = len(results)
     score = int(round(blended_rate * 100))
     if blended_rate == 0:
@@ -612,8 +619,10 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     # TABLE C — prompt-category citation breakdown
     table_c_rows: list[list[str]] = []
     if by_cat:
-        table_c_rows.append(["── 按提问类型的引用率 ──", "", "", "", ""])
-        table_c_rows.append(["提问类型 Category", "测试行数", "被引用", "引用率 %", ""])
+        # by_category counts brand-NAME appearances (target_cited), not domain
+        # citations — label it as such so it isn't read as the GEO citation rate.
+        table_c_rows.append(["── 按提问类型的品牌名提及率（非域名引用） ──", "", "", "", ""])
+        table_c_rows.append(["提问类型 Category", "测试行数", "品牌名出现", "提及率 %", ""])
         for cat, cs in by_cat.items():
             crate = cs.get("citation_rate", 0) or 0
             table_c_rows.append([
@@ -722,8 +731,10 @@ def _module_ai_citation(ai: dict, brand_name: str = "",
     sent_clause = (f"，AI 提及情感为 {sentiment}"
                    if (total_cited > 0 or sum(sent_break.values()) > 0)
                    else "")
+    _name_clause = (f"（品牌名仅在 {total_name_mentions} 个回答中被提及，但域名未被引用为来源）"
+                    if total_cited == 0 and total_name_mentions else "")
     verdict = (f"在 {total_rows} 个买家意图查询结果中（生成式引擎每查询最多取样 {runs_n} 次），"
-               f"AI 引擎引用 {brand} {total_cited} 次，竞品被引用 {comp_total} 次，"
+               f"AI 引擎将 {brand} 域名引用为来源 {total_cited} 次{_name_clause}，竞品被引用 {comp_total} 次，"
                f"声量占比(SoV) {sov}%{sent_clause}。")
 
     n_tested_engines = len(tested)
@@ -1323,8 +1334,9 @@ def _module_schema_ai(schema: dict, freshness: dict) -> dict:
         # the module header score (header = composite minus finding deductions).
         # The header is the single source of truth; describe state in words here.
         "summary_html": (f"<p>检测到 {len(found_types)} 种 Schema 类型（{types_str}）。</p>"
-                         f"<p>月均发布 {pv.get('avg_per_month_12m',0)} 页（基准 {velocity_basis} — 产品页更替非内容营销），"
-                         f"博客枢纽缺失。</p>"),
+                         + (f"<p>月均发布 {pv.get('avg_per_month_12m',0)} 页（基准 {velocity_basis} — 产品页更替非内容营销），博客枢纽缺失。</p>"
+                            if _fresh_measurable
+                            else "<p>未发现可用 sitemap，内容更新频率无法测量；博客/编辑内容枢纽缺失。</p>")),
         "data_table": {"headers": ["指标", "数值", "状态"], "rows": rows},
         "findings": findings,
     }
@@ -1990,11 +2002,9 @@ def _strip_non_competitors(offsite: dict[str, dict]) -> None:
     st = ai.get("summary_stats") or {}
     tc = st.get("top_competitors_cited")
     if isinstance(tc, list):
-        # Block-list / heuristic filter only. The ≥2-appearance de-noise is
-        # applied LATER, after the Perplexity fold, so a one-off source added by
-        # the fold is also caught (see _module_ai_citation final guard).
-        st["top_competitors_cited"] = [
-            c for c in tc if _is_real_competitor((c or {}).get("domain", ""))]
+        # De-noise the SHARED stats so the appendix (which reads this) shows only
+        # real recurring vendors, same as the module ranking table.
+        st["top_competitors_cited"] = _denoise_competitors(tc)
     for r in ai.get("results", []) or []:
         if isinstance(r, dict) and isinstance(r.get("competitors_cited"), list):
             r["competitors_cited"] = [c for c in r["competitors_cited"]
