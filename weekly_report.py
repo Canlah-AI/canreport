@@ -19,6 +19,9 @@ Usage:
 """
 from __future__ import annotations
 
+import os
+os.environ['DYLD_LIBRARY_PATH'] = '/opt/homebrew/lib:' + os.environ.get('DYLD_LIBRARY_PATH', '')
+
 import argparse
 import json
 import sys
