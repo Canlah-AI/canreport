@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Adapter to the canmarket-site-audit probe engine.
+"""Adapter to the site-audit probe engine.
 
 The probe engine (data layer) lives in a separate repo. This module locates
 it, runs the off-site SEO probes, and returns their raw output keyed by a
 short name the contract builder understands.
 
 The engine path is resolved in this order:
-  1. $CANMARKET_AUDIT_PATH env var
-  2. ~/dev/canmarket-site-audit-v1.1  (default dev location)
-  3. ~/dev/canmarket-site-audit
+  1. $SITE_AUDIT_PATH env var (or legacy $CANMARKET_AUDIT_PATH fallback)
+  2. ~/dev/site-audit-v1.1  (default dev location)
+  3. ~/dev/site-audit
 
 Off-site probes run concurrently. Each is independent; a failure in one
 returns an empty dict for that probe rather than aborting the whole run.
@@ -328,7 +328,7 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
         # env, so this is a no-op (stays in backlog) when the key is absent.
         enable_chatgpt=True,
     )
-    # Cross-repo version skew: older pinned engines (canmarket-site-audit-v1.1)
+    # Cross-repo version skew: older pinned engines (site-audit-v1.1)
     # predate the Bright Data passthrough and reject enable_brightdata. Drop any
     # kwarg the resolved engine's run_citation_test signature doesn't accept
     # rather than letting one unknown kwarg crash the whole AI-citation probe.
@@ -347,18 +347,20 @@ def run_ai_citation(engine_root: Path, url: str, brand: str | None,
 
 
 def locate_engine() -> Path:
-    """Return the path to the canmarket-site-audit repo, or raise."""
+    """Return the path to the site-audit repo, or raise."""
     candidates = []
-    env = os.environ.get("CANMARKET_AUDIT_PATH")
+    # SITE_AUDIT_PATH is the current name; CANMARKET_AUDIT_PATH is kept as a
+    # deprecated fallback so existing environments keep working.
+    env = os.environ.get("SITE_AUDIT_PATH") or os.environ.get("CANMARKET_AUDIT_PATH")
     if env:
         candidates.append(Path(env).expanduser())
-    candidates.append(Path.home() / "dev" / "canmarket-site-audit-v1.1")
-    candidates.append(Path.home() / "dev" / "canmarket-site-audit")
+    candidates.append(Path.home() / "dev" / "site-audit-v1.1")
+    candidates.append(Path.home() / "dev" / "site-audit")
     for c in candidates:
         if (c / "probes").is_dir():
             return c
     raise FileNotFoundError(
-        "canmarket-site-audit engine not found. Set $CANMARKET_AUDIT_PATH or "
+        "site-audit engine not found. Set $SITE_AUDIT_PATH or "
         f"clone it to one of: {[str(c) for c in candidates]}"
     )
 

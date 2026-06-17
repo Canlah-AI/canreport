@@ -2,7 +2,7 @@
 
 One command turns a URL into a branded HTML + PDF audit report. This repo is the
 **presentation layer**: it runs the on-site infra audit, pulls off-site SEO data
-from the separate `canmarket-site-audit` probe engine, merges both into a neutral
+from the separate `site-audit` probe engine, merges both into a neutral
 report contract, and renders it through a pluggable template. The Google EAC report
 is just the **first template** — drop a new folder under `templates/` to add your own.
 
@@ -10,7 +10,7 @@ is just the **first template** — drop a new folder under `templates/` to add y
 
 ```
 DATA                         CONTRACT                  PRESENTATION
-canmarket-site-audit  ──┐
+site-audit  ──┐
   (off-site probes)     ├─→  contract.py  ─────────→  templates/google/   ─→ HTML/PDF
 this repo's eac_* probes┘    (neutral report dict)    templates/canmarket/ (your own)
   (on-site infra)
@@ -18,8 +18,9 @@ this repo's eac_* probes┘    (neutral report dict)    templates/canmarket/ (yo
 
 - **Data layer** never changes when you swap templates.
 - **Templates** only restyle the same contract — see `contract.py` for the field list.
-- Wiring to the engine is resolved via `$CANMARKET_AUDIT_PATH` (default
-  `~/dev/canmarket-site-audit-v1.1`); off-site probes are loaded by file path so the
+- Wiring to the engine is resolved via `$SITE_AUDIT_PATH` (legacy
+  `$CANMARKET_AUDIT_PATH` still honored as a fallback; default
+  `~/dev/site-audit-v1.1`); off-site probes are loaded by file path so the
   two repos' `probes` packages never collide.
 
 ## One command
@@ -52,7 +53,7 @@ Output lands in `output/{domain}/{template}-audit-{date}.{html,pdf,json}`.
 | Trust Content | `eac_trust_probe` | Blog/content, product trust signals, SSL |
 | Conversion Tracking | `eac_tracking_probe` | GA4, GTM, Google Ads, Meta Pixel, Consent Mode v2 |
 
-**Off-site SEO** (3 modules, from the `canmarket-site-audit` engine):
+**Off-site SEO** (3 modules, from the `site-audit` engine):
 
 | Module | Probes | Checks |
 |--------|--------|--------|
@@ -101,22 +102,28 @@ python eac_audit.py https://example.com --company "Example Corp" --market US,EU
 ## Project Structure
 
 ```
-eac-audit/
-├── eac_audit.py              # Orchestrator — runs all probes, assembles report
+canreport/
+├── report.py                 # CLI entry — URL → contract → template → HTML/PDF
+├── engine.py                 # Adapter to the site-audit off-site probe engine
+├── contract.py               # Neutral report contract (template-agnostic field set)
+├── scoring.py                # Severity → deduction scoring
+├── reconcile.py              # Cross-checks contract against raw probe data
+├── weekly_report.py          # Weekly-agent-report variant
+├── eac_audit.py              # Legacy standalone on-site 4-probe CLI
 ├── eac_demo.py               # Demo data generator for template testing
-├── probes/
+├── probes/                   # On-site infra probes (eac_*) + helpers
 │   ├── eac_speed_probe.py    # TTFB, LCP, CDN, server location
 │   ├── eac_form_probe.py     # CAPTCHA, form fields, CMS detection
 │   ├── eac_trust_probe.py    # Blog, product specs, testimonials, SSL
 │   ├── eac_tracking_probe.py # GA4, GTM, Ads, Consent Mode v2
-│   └── lighthouse_psi.py     # Google PageSpeed Insights API wrapper
+│   ├── lighthouse_psi.py     # Google PageSpeed Insights API wrapper
+│   └── ...                   # detection signatures, sitemap/prompt discovery, etc.
+├── templates/                # Pluggable presentation layer
+│   ├── google/               # report.html.j2, cover.html, executive.html, assets/
+│   ├── canmarket/
+│   └── weekly-agent-report/
 └── render/
-    ├── html_to_pdf.py        # WeasyPrint HTML → PDF converter
-    ├── assets/               # EAC branding logos (PNG)
-    └── templates/
-        ├── eac-report.html.j2  # Main Jinja2 report template
-        ├── eac-cover.html      # Cover page
-        └── eac-executive.html  # Executive summary
+    └── html_to_pdf.py        # WeasyPrint HTML → PDF converter
 ```
 
 ## How It Works
@@ -158,7 +165,7 @@ No API keys required. The PageSpeed Insights API allows 25K queries/day per IP w
 
 ## Sample Reports
 
-See the [`audit-reports/`](../audit-reports/) directory for generated examples:
+Generated reports land under `output/{domain}/`. Recent examples:
 
 | Site | Score | Date | Key Findings |
 |------|-------|------|-------------|

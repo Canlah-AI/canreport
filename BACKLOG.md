@@ -13,7 +13,7 @@ precision when matched and doing nothing when not:
 - **Industry-specific schema expectations** — e.g. a verified ecommerce brand →
   expect Product/Offer/AggregateRating; a LocalBusiness → expect address/hours.
   (Replaces the removed `INDUSTRY_EXPECTED_TYPES` 6-industry table in
-  `canmarket-site-audit/probes/schema_validator.py`; currently still hardcoded —
+  `site-audit/probes/schema_validator.py`; currently still hardcoded —
   thread the detected business type + LLM-derive expected types, generic
   [Organization, WebSite] default.)
 - **Region/language-specific media priors** — e.g. a verified `.de` brand →
